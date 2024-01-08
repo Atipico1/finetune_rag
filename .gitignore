@@ -1,5 +1,17 @@
 # cache
 __pycache__/
+*/__pycache__/
+# zeroshot result
+zeroshot/
+
+# log folder
+log/
+
+# wandb
+wandb/
 
 # zeroshot result
 zeroshot/
+
+# test file
+test.ipynb
