@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"]="1,2,3,4"
+os.environ["CUDA_VISIBLE_DEVICES"]="1,2,3,4,5"
 import torch, wandb, os
 from src.script_arguments import ScriptArguments
 from src.utils import normalize_question
@@ -11,7 +11,8 @@ from transformers import (
     BitsAndBytesConfig,
     HfArgumentParser,
     TrainingArguments,
-    AutoTokenizer
+    AutoTokenizer,
+    DataCollatorForLanguageModeling
 )
 # os.environ["WANDB_PROJECT"] = "finetune-robust-rag"
 
@@ -28,7 +29,7 @@ def formatting_for_original(example):
     for i in range(len(example['question'])):
         ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i])])
         q = normalize_question(example['question'][i])
-        text = f"### Background:\n{ctxs}\n\n ### Q: {q}\n### A: {example['answers'][i][0]}"
+        text = f"### Background:\n{ctxs}\n\n### Q: {q}\n### A: {example['answers'][i][0]} </s>"
         output_texts.append(text)
     return output_texts
 
@@ -38,7 +39,7 @@ def formatting_for_cbr(example):
         ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i])])
         q = normalize_question(example['question'][i])
         case_text = make_case_text(example["case"][i])
-        text = case_text + f"### Background:\n{ctxs}\n\n ### Q: {q}\n### A: {example['answers'][i][0]}"
+        text = case_text + f"### Background:\n{ctxs}\n\n ### Q: {q}\n### A: {example['answers'][i][0]}</s>"
         output_texts.append(text)
     return output_texts
 
@@ -54,6 +55,25 @@ def _preprocess_dataset(dataset, args):
                     return dataset.map(lambda x: {"case": sorted(x["case"], key=lambda y: float(y["distance"]), reverse=True)[:args.num_cases]})
     else:
         return dataset
+    
+class QADataCollator(DataCollatorForLanguageModeling):
+    answer_start_token_id = 835  # "###" token id
+
+    def __call__(self, examples):
+        print(type(examples), type(examples[0]), examples[0].keys())
+        batch = super().__call__(examples)
+        print(type(batch))
+        # Only apply cross entropy loss to the answer part of the labels
+        for idx, label in enumerate(batch["labels"]):
+            print(label)
+            print(label.shape)
+            answer_end = torch.where(label == -100)[0][0]
+            answer_start = torch.where(label == self.answer_start_token_id)[0][-1]
+            label[:answer_start+3] = -100
+            label[answer_end] = 2
+            batch["labels"][idx] = label
+
+        return batch
     
 def main(args):
     bnb_config = BitsAndBytesConfig(
@@ -71,7 +91,7 @@ def main(args):
         args.model_name, trust_remote_code=True
     )
     tokenizer.padding_side = "right"
-    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.pad_token = tokenizer.unk_token
     training_args = TrainingArguments(
         output_dir=args.output_dir+args.run_name,
         per_device_train_batch_size=args.batch_size,
@@ -102,6 +122,7 @@ def main(args):
     dataset = _preprocess_dataset(dataset, args)
     response_template = "### A:"
     collator = DataCollatorForCompletionOnlyLM(tokenizer.encode(response_template, add_special_tokens = False)[2:], tokenizer=tokenizer, mlm=False)
+    #collator = QADataCollator(tokenizer=tokenizer, mlm=False)
     formatting_func = formatting_for_cbr if "case" in args.dataset_name.lower() else formatting_for_original
     trainer = SFTTrainer(
             model=model,
