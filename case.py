@@ -79,7 +79,7 @@ def main(args):
     original_case = load_dataset("Seongill/SQuAD_unique_questions", split="train")
     original_case = _preprocess(original_case, args)
     if args.test:
-        qa_dataset = qa_dataset.select(range(5000))
+        qa_dataset = qa_dataset.select(range(1000))
     print(f"{args.qa_dataset} Loaded! -> Size : {len(qa_dataset)}")
     sub_original = defaultdict(list)
     for row in original_case:

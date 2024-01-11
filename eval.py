@@ -6,6 +6,8 @@ from tqdm.auto import tqdm
 import torch
 import argparse
 import os
+import pandas as pd
+import json
 
 
 def preprocess_dataset(dataset, args):
@@ -55,24 +57,32 @@ def main(args):
         framework="pt"
     )
     if args.test:
-        dataset = dataset.shuffle()
-        dataset = dataset.select(range(20))
+        dataset = dataset.shuffle(seed=42)
+        dataset = dataset.select(range(1800))
     dataset = preprocess_dataset(dataset, args)
     result,ems, accs = [], [], []
     iterator = tqdm(dataset, desc="Generating...")
-    with open('log.txt', 'w') as file:
-
-        for row in iterator:
-            prompt = formatting_for_evaluation(row)
-            output = pipe(prompt,max_new_tokens=args.max_new_tokens)[0]["generated_text"]
-            output_wo_prompt = output[len(prompt):]
-            is_em = exact_match_score(output_wo_prompt, row["answers"])
-            is_acc = int(text_has_answer(row["answers"], output_wo_prompt))
-            ems.append(is_em)
-            accs.append(is_acc)
-            file.write(f"Answer : {', '.join(row['answers'])}\nPredict : {output_wo_prompt}\n\n")
-            result.append([row["question"], row["answers"], prompt, output, output_wo_prompt, is_em, is_acc])
-            iterator.set_description(desc=f"EM : {sum(ems)/len(ems):.2f} | Acc : {sum(accs)/len(accs):.2f}")
+    for row in iterator:
+        prompt = formatting_for_evaluation(row)
+        output = pipe(prompt,max_new_tokens=args.max_new_tokens)[0]["generated_text"]
+        output_wo_prompt = output[len(prompt):]
+        is_em = exact_match_score(output_wo_prompt, row["answers"])
+        is_acc = int(text_has_answer(row["answers"], output_wo_prompt))
+        ems.append(is_em)
+        accs.append(is_acc)
+        result.append([row["question"], row["answers"], prompt, output, output_wo_prompt, is_em, is_acc])
+        iterator.set_description(desc=f"EM : {sum(ems)/len(ems):.2f} | Acc : {sum(accs)/len(accs):.2f}")
+    df = pd.DataFrame(result, columns=["Question", "Answers", "Prompt", "Prediction", "Prediction_wo_prompt", "EM", "ACC"])
+    df.to_csv(f"{args.dataset_name.split('/')[-1]}_{args.model.split('/')[-1]}.csv", index=False)
+    try:
+        with open(f"{args.dataset_name.split('/')[-1]}_{args.model.split('/')[-1]}.json", "w") as f:
+            json.dump({"dataset name": args.dataset_name,
+                       "model name": args.model,
+                       "EM": sum(ems)/len(ems),
+                       "ACC": sum(accs)/len(accs)
+                       }, f)
+    except:
+        pass
         # output = tokenizer(prompt, return_tensors="pt").to(args.device)
         # output = model.generate(**output, max_new_tokens=args.max_new_tokens)
         # pred = tokenizer.batch_decode(output, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0]

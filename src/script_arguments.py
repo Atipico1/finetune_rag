@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
 
 @dataclass
 class ScriptArguments:
@@ -46,7 +46,7 @@ class ScriptArguments:
         default=100, metadata={"help": "Number of updates steps before two checkpoint saves"}
     )
     num_contexts: Optional[int] = field(default=1, metadata={"help": "Number of contexts to use for training"})
-    num_cases: Optional[int] = field(default=1, metadata={"help": "Number of cases to use for training"})
+    num_cases: Optional[Union[int, str]] = field(default=1, metadata={"help": "Number of cases to use for training"})
     save_total_limit: Optional[int] = field(default=10, metadata={"help": "Limits total number of checkpoints."})
     push_to_hub: Optional[bool] = field(default=True, metadata={"help": "Push the model to HF Hub"})
     gradient_checkpointing: Optional[bool] = field(

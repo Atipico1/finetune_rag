@@ -1,6 +1,7 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"]="1,2,3,4,5"
+os.environ["CUDA_VISIBLE_DEVICES"]="0,1,6,7"
 import torch, wandb, os
+import numpy as np
 from src.script_arguments import ScriptArguments
 from src.utils import normalize_question
 from datasets import load_dataset, Dataset
@@ -27,17 +28,20 @@ def make_case_text(case_exs):
 def formatting_for_original(example):
     output_texts = []
     for i in range(len(example['question'])):
-        ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i])])
         q = normalize_question(example['question'][i])
-        text = f"### Background:\n{ctxs}\n\n### Q: {q}\n### A: {example['answers'][i][0]} </s>"
+        if num_contexts == 0:
+            text = f"### Q: {q}\n### A: {example['answers'][i][0]}</s>"
+        else:
+            ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i][:num_contexts])])
+            text = f"### Background:\n{ctxs}\n\n### Q: {q}\n### A: {example['answers'][i][0]}</s>"
         output_texts.append(text)
     return output_texts
 
 def formatting_for_cbr(example):
     output_texts = []
     for i in range(len(example['question'])):
-        ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i])])
         q = normalize_question(example['question'][i])
+        ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i])])  
         case_text = make_case_text(example["case"][i])
         text = case_text + f"### Background:\n{ctxs}\n\n ### Q: {q}\n### A: {example['answers'][i][0]}</s>"
         output_texts.append(text)
@@ -47,35 +51,24 @@ def _preprocess_dataset(dataset, args):
     if "case" in args.dataset_name.lower():
         columns_names = dataset.column_names
         if "case" in columns_names:
+            if args.num_cases == "random":
+                ceiling = len(dataset["case"][0])
+                return dataset.map(lambda x: {"case": sorted(x["case"], key=lambda y: float(y["distance"]), reverse=True)[:np.random.randint(1, ceiling+1)]})
             return dataset.map(lambda x: {"case": sorted(x["case"], key=lambda y: float(y["distance"]), reverse=True)[:args.num_cases]})
         else:
             for col in columns_names:
                 if "case" in col:
                     dataset = dataset.rename_column(col, "case")
+                    if args.num_cases == "random":
+                        ceiling = len(dataset["case"][0])
+                        return dataset.map(lambda x: {"case": sorted(x["case"], key=lambda y: float(y["distance"]), reverse=True)[:np.random.randint(1, ceiling+1)]})
                     return dataset.map(lambda x: {"case": sorted(x["case"], key=lambda y: float(y["distance"]), reverse=True)[:args.num_cases]})
     else:
         return dataset
     
-class QADataCollator(DataCollatorForLanguageModeling):
-    answer_start_token_id = 835  # "###" token id
-
-    def __call__(self, examples):
-        print(type(examples), type(examples[0]), examples[0].keys())
-        batch = super().__call__(examples)
-        print(type(batch))
-        # Only apply cross entropy loss to the answer part of the labels
-        for idx, label in enumerate(batch["labels"]):
-            print(label)
-            print(label.shape)
-            answer_end = torch.where(label == -100)[0][0]
-            answer_start = torch.where(label == self.answer_start_token_id)[0][-1]
-            label[:answer_start+3] = -100
-            label[answer_end] = 2
-            batch["labels"][idx] = label
-
-        return batch
-    
 def main(args):
+    global num_contexts
+    num_contexts = args.num_contexts
     bnb_config = BitsAndBytesConfig(
             load_in_8bit=args.load_in_8bit, load_in_4bit=args.load_in_4bit
         )

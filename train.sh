@@ -2,7 +2,7 @@
 #SBATCH -J rag-case
 #SBATCH -p gpu
 #SBATCH --nodes=1
-#SBATCH --nodelist=n02
+#SBATCH --nodelist=n01
 #SBATCH --ntasks-per-node=4
 #SBATCH --gres=gpu:A6000:4
 #SBATCH --mem=60G
