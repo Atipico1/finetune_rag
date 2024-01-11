@@ -2,7 +2,7 @@ import torch
 import spacy
 import argparse
 from tqdm.auto import tqdm
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, DatasetDict
 from transformers import AutoTokenizer, DPRQuestionEncoder
 from src.utils import str2bool
 
@@ -66,7 +66,6 @@ def remove_duplicate(data: Dataset):
     masked_queries = data["masked_query"]
     unique_queries = set()
     result_idxs = []
-
     for idx, query in enumerate(masked_queries):
         if query not in unique_queries:
             unique_queries.add(query)
@@ -90,14 +89,23 @@ def _preprocess(dataset: Dataset, args):
         return dataset
 
 def main(args):
-    dataset = load_dataset(args.dataset, split=args.split)
-    if args.test:
-        dataset = dataset.select(range(5000))
-    print(f"{args.dataset} Loaded! -> Size : {len(dataset)}")
-    dataset = _preprocess(dataset, args)
-    print(f"Preprocessing Done! -> Size : {len(dataset)}")
-    if args.push_to_hub and not args.test:
-        dataset.push_to_hub(f"{args.dataset}_{args.split}_preprocessed")
+    if args.split == "all":
+        dataset = load_dataset(args.dataset)
+        train, test = dataset["train"], dataset["test"]
+        train = _preprocess(train, args)
+        test = _preprocess(test, args)
+        result = DatasetDict({"train": train, "test": test})
+        if args.push_to_hub:
+            result.push_to_hub(f"{args.dataset}_preprocessed")
+    else:
+        dataset = load_dataset(args.dataset, split=args.split)
+        if args.test:
+            dataset = dataset.select(range(5000))
+        print(f"{args.dataset} Loaded! -> Size : {len(dataset)}")
+        dataset = _preprocess(dataset, args)
+        print(f"Preprocessing Done! -> Size : {len(dataset)}")
+        if args.push_to_hub and not args.test:
+            dataset.push_to_hub(f"{args.dataset}_{args.split}_preprocessed")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

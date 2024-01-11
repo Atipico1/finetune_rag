@@ -2,7 +2,7 @@ import argparse
 import numpy as np
 import faiss
 from src.utils import str2bool
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, DatasetDict
 from collections import defaultdict
 from tqdm.auto import tqdm
 from typing import Dict, List, Tuple
@@ -75,12 +75,21 @@ def _preprocess(dataset: Dataset, args):
         return dataset
 
 def main(args):
-    qa_dataset = load_dataset(args.qa_dataset, split=args.qa_split)
+    if args.qa_split == "all":
+        qa_dataset = load_dataset(args.qa_dataset)
+        train, test = qa_dataset["train"], qa_dataset["test"]
+        if args.test:
+            train = train.select(range(1000))
+            test = test.select(range(1000))
+        print(f"{args.qa_dataset} Train Loaded! -> Size : {len(train)}")
+        print(f"{args.qa_dataset} Test Loaded! -> Size : {len(test)}")
+    else:
+        qa_dataset = load_dataset(args.qa_dataset, split=args.qa_split)
+        if args.test:
+            qa_dataset = qa_dataset.select(range(1000))
+        print(f"{args.qa_dataset} Loaded! -> Size : {len(qa_dataset)}")
     original_case = load_dataset("Seongill/SQuAD_unique_questions", split="train")
     original_case = _preprocess(original_case, args)
-    if args.test:
-        qa_dataset = qa_dataset.select(range(1000))
-    print(f"{args.qa_dataset} Loaded! -> Size : {len(qa_dataset)}")
     sub_original = defaultdict(list)
     for row in original_case:
         head_word = row["question"].strip().lower().split()[0]
@@ -88,11 +97,23 @@ def main(args):
             head_word = "original"
         sub_original[head_word].append(({"question":row["question"], "context":row["context"],"answer":row["answers"]["text"][0]}, row["query_embedding"]))
     multiple_indexs_origin: Dict = build_multiple_indexes(sub_original, [k for k in sub_original.keys()])
-    original_case = match_case(qa_dataset, multiple_indexs_origin, args)
-    qa_dataset = qa_dataset.add_column("original_case", original_case)
-    qa_dataset = qa_dataset.remove_columns(["query_embedding"])
-    if not args.test:
-        qa_dataset.push_to_hub(f"{args.qa_dataset}_with_so_case")
+    
+    if args.qa_split == "all":
+        train_original_case = match_case(train, multiple_indexs_origin, args)
+        test_original_case = match_case(test, multiple_indexs_origin, args)
+        train = train.add_column("case", train_original_case)
+        test = test.add_column("case", test_original_case)
+        train = train.remove_columns(["query_embedding"])
+        test = test.remove_columns(["query_embedding"])
+        if not args.test:
+            result = DatasetDict({"train": train, "test": test})
+            result.push_to_hub(f"{args.qa_dataset}_with_short-original_case")
+    else:
+        original_case = match_case(qa_dataset, multiple_indexs_origin, args)
+        qa_dataset = qa_dataset.add_column("case", original_case)
+        qa_dataset = qa_dataset.remove_columns(["query_embedding"])
+        if not args.test:
+            qa_dataset.push_to_hub(f"{args.qa_dataset}_with_short-original_case")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

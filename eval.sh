@@ -4,15 +4,16 @@
 #SBATCH --nodes=1
 #SBATCH --nodelist=n02
 #SBATCH --ntasks-per-node=4
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --mem=60G
-#SBATCH -o log/eval.out
-#SBATCH -e log/eval.err
+#SBATCH -o log/eval2.out
+#SBATCH -e log/eval2.err
 #SBATCH --time 72:00:00
 
 python eval.py \
- --revision 5f81ee1a1befd9c3a159950349f44a1908805f4b \
- --test True
-python eval.py \
- --revision 57b6a3656bc74f806796a8c162fd1a4ce9db03a9 \
- --test True
+ --dataset_name Atipico1/NQ-10k_with_short-original-case \
+ --model Atipico1/NQ-cbr \
+ --revision ba6454058f4dfed1b748f78ee4c84692f9ad2f7c \
+ --num_cases 3 \
+ --num_contexts 5 \
+ --test False

@@ -11,7 +11,13 @@
 #SBATCH --time 20:00:00
 
 python preprocess.py \
- --dataset Atipico1/NQ \
- --split test \
+ --dataset Atipico1/NQ-10k \
+ --split all \
+ --push_to_hub True \
+ --remove_duplicate False
+
+python preprocess.py \
+ --dataset Atipico1/popQA \
+ --split all \
  --push_to_hub True \
  --remove_duplicate False

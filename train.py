@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"]="0,1,6,7"
+os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5"
 import torch, wandb, os
 import numpy as np
 from src.script_arguments import ScriptArguments
@@ -69,6 +69,10 @@ def _preprocess_dataset(dataset, args):
 def main(args):
     global num_contexts
     num_contexts = args.num_contexts
+    try:
+        args.num_cases = int(args.num_cases)
+    except:
+        pass
     bnb_config = BitsAndBytesConfig(
             load_in_8bit=args.load_in_8bit, load_in_4bit=args.load_in_4bit
         )
@@ -97,9 +101,10 @@ def main(args):
         num_train_epochs=args.num_train_epochs,
         max_steps=args.max_steps,
         save_steps=args.save_steps,
+        save_strategy=args.save_strategy,
         save_total_limit=args.save_total_limit,
         push_to_hub=args.push_to_hub,
-        hub_model_id=args.hub_model_id,
+        hub_model_id=f"Atipico1/{args.run_name}",
         warmup_ratio=args.warmup_ratio,
         lr_scheduler_type=args.lr_scheduler_type,
         gradient_checkpointing=args.gradient_checkpointing)
@@ -116,7 +121,7 @@ def main(args):
     response_template = "### A:"
     collator = DataCollatorForCompletionOnlyLM(tokenizer.encode(response_template, add_special_tokens = False)[2:], tokenizer=tokenizer, mlm=False)
     #collator = QADataCollator(tokenizer=tokenizer, mlm=False)
-    formatting_func = formatting_for_cbr if "case" in args.dataset_name.lower() else formatting_for_original
+    formatting_func = formatting_for_cbr if args.num_cases > 0 else formatting_for_original
     trainer = SFTTrainer(
             model=model,
             train_dataset=dataset,
