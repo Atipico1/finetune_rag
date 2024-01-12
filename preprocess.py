@@ -22,7 +22,7 @@ def masking(doc) -> str:
         text_list[ent.start] = "[MASK]"
     return " ".join(text_list).replace(" [B]", "").replace(" @", "")
 
-def query_masking(nlp, dataset: Dataset, args):
+def query_masking(nlp, dataset: Dataset):
     ctxs = dataset["question"]
     result = []
     for i in tqdm(range(0, len(ctxs), 1000), desc="Masking..."):
@@ -70,7 +70,7 @@ def remove_duplicate(data: Dataset):
         if query not in unique_queries:
             unique_queries.add(query)
             result_idxs.append(idx)
-
+    print(f"Remove duplicates -> Before : {len(data)} | After : {len(result_idxs)}")
     filtered_data = data.select(result_idxs)
     return filtered_data
 
@@ -80,7 +80,7 @@ def _preprocess(dataset: Dataset, args):
         nlp = spacy.load("en_core_web_trf")
         tokenizer = AutoTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
         model = DPRQuestionEncoder.from_pretrained("facebook/dpr-question_encoder-single-nq-base").to("cuda")
-        dataset = query_masking(nlp, dataset, args)
+        dataset = query_masking(nlp, dataset)
         if args.remove_duplicate:  
             dataset = remove_duplicate(dataset)
         dataset = query_embedding(model, tokenizer, dataset, args)
