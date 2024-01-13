@@ -71,7 +71,7 @@ def remove_duplicate(data: Dataset):
             unique_queries.add(query)
             result_idxs.append(idx)
     print(f"Remove duplicates -> Before : {len(data)} | After : {len(result_idxs)}")
-    filtered_data = data.select(result_idxs)
+    filtered_data = data.select(result_idxs, writer_batch_size=10000)
     return filtered_data
 
 def _preprocess(dataset: Dataset, args):
