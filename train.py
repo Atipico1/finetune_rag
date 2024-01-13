@@ -41,7 +41,7 @@ def formatting_for_cbr(example):
     output_texts = []
     for i in range(len(example['question'])):
         q = normalize_question(example['question'][i])
-        ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i])])  
+        ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i][:num_contexts])])  
         case_text = make_case_text(example["case"][i])
         text = case_text + f"### Background:\n{ctxs}\n\n ### Q: {q}\n### A: {example['answers'][i][0]}</s>"
         output_texts.append(text)
