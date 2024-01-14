@@ -69,6 +69,14 @@ def text_has_answer(answers, text) -> bool:
             return True
     return False
 
+def text_has_answer_wo_normalization(answers, text) -> bool:
+    if isinstance(answers, str):
+        answers = [answers]
+    for single_answer in answers:
+        if single_answer in text:
+            return True
+    return False
+
 def str2bool(v):
     if isinstance(v, bool):
        return v

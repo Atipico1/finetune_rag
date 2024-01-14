@@ -30,7 +30,7 @@ class ScriptArguments:
             "help": "Learning rate schedule. Constant a bit better than cosine, and has advantage for analysis"
         },
     )
-    warmup_ratio: Optional[float] = field(default=0.01, metadata={"help": "the warmup ratio"})
+    warmup_ratio: Optional[float] = field(default=0.1, metadata={"help": "the warmup ratio"})
     packing: Optional[bool] = field(default=False, metadata={"help": "use packing"})
     cal_max_len: Optional[bool] = field(default=False, metadata={"help": "calculate max length of the dataset"})
     load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
@@ -43,7 +43,7 @@ class ScriptArguments:
     num_train_epochs: Optional[int] = field(default=3, metadata={"help": "the number of training epochs"})
     max_steps: Optional[int] = field(default=-1, metadata={"help": "the number of training steps"})
     save_steps: Optional[int] = field(
-        default=100, metadata={"help": "Number of updates steps before two checkpoint saves"}
+        default=500, metadata={"help": "Number of updates steps before two checkpoint saves"}
     )
     save_strategy: Optional[str] = field(default="epoch", metadata={"help": "The checkpoint save strategy to use."})
     num_contexts: Optional[int] = field(default=1, metadata={"help": "Number of contexts to use for training"})

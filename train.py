@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2,3,4,5"
+os.environ["CUDA_VISIBLE_DEVICES"]="3,4,5,6"
 import torch, wandb, os
 import numpy as np
 from src.script_arguments import ScriptArguments
@@ -102,6 +102,7 @@ def main(args):
         max_steps=args.max_steps,
         save_steps=args.save_steps,
         save_strategy=args.save_strategy,
+        hub_strategy="checkpoint",
         save_total_limit=args.save_total_limit,
         push_to_hub=args.push_to_hub,
         hub_model_id=f"Atipico1/{args.run_name}",

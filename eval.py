@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"]="6,7"
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, pipeline
 from datasets import load_dataset
 from peft import AutoPeftModelForCausalLM, PeftConfig, PeftModel
@@ -80,7 +80,8 @@ def main(args):
         generation_config=config,
         framework="pt"
     )
-    run_name = args.model.split("/")[-1]
+    run_name = (args.prefix + "_") if args.prefix != "" else ""
+    run_name += args.model.split("/")[-1]
     if args.test:
         dataset = dataset.shuffle(seed=42)
         dataset = dataset.select(range(10))
@@ -120,6 +121,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_name", type=str, default="Atipico1/NQ")
     parser.add_argument("--model", type=str, default="Atipico1/NQ-base-v4")
+    parser.add_argument("--prefix", type=str, default="")
     parser.add_argument("--revision", type=str, default=None)
     parser.add_argument("--num_cases", type=int, default=0)
     parser.add_argument("--num_contexts", type=int, default=5)
