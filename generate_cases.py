@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import faiss
 import re
+import time
 from tqdm.auto import tqdm
 from datasets import Dataset, DatasetDict, concatenate_datasets
 import spacy
@@ -44,7 +45,10 @@ def load_mrqa(args):
     print(f"MRQA Loaded without {args.except_subset} ! -> Size : {len(mrqa)}")
     return mrqa
 
-def preprocess(args, model, tokenizer, nlp, mrqa): 
+def preprocess(args, mrqa):
+    nlp = spacy.load(args.spacy_model)
+    tokenizer = AutoTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
+    model = DPRQuestionEncoder.from_pretrained("facebook/dpr-question_encoder-single-nq-base").to("cuda")
     mrqa = query_masking(nlp, mrqa)
     del nlp
     nlp = spacy.load(args.spliter_model)
@@ -67,14 +71,13 @@ def generate_unans(args, dataset):
     dataset, c2embs = find_similar_contexts(dataset, args)
     dataset = find_similar_contexts_with_questions(q_embs, c2embs, dataset, args)
     dataset = find_random_contexts(dataset)
-    wandb.init(project="craft-cases", name="unanswerable", config=vars(args))
-    df = pd.DataFrame(dataset)[["question",
-                                "context",
-                                "answer_in_context",
-                                "C_similar_context",
-                                "QC_similar_context",
-                                "random_context"]].sample(50)
+    wandb.init(project="craft-cases", name="unanswerable" if not args.test else "test-unanswerable", config=vars(args))
+    df = pd.DataFrame(dataset)
+    df = df.answer_in_context.apply(lambda x: ", ".join(x))
+    df = df[["question","context","answer_in_context","C_similar_context","QC_similar_context","random_context"]].sample(100)
     wandb.log({"samples": wandb.Table(dataframe=df)})
+    if not args.test:
+        dataset.push_to_hub("Atipico1/mrqa_unanswerable_v2")
 
 def generate_adversary(args):
     pass
@@ -122,12 +125,9 @@ if __name__=="__main__":
     args = parser.parse_args()
     if args.use_gpu:
         spacy.prefer_gpu(args.gpu_id)
-    tokenizer = AutoTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
-    model = DPRQuestionEncoder.from_pretrained("facebook/dpr-question_encoder-single-nq-base").to("cuda")
-    nlp = spacy.load(args.spacy_model)
     dataset = _load_dataset(args)
     if args.task == "preprocess":
-        preprocess(args, model, tokenizer, nlp, dataset)
+        preprocess(args, dataset)
     elif args.task == "unans":
         generate_unans(args, dataset)
     elif args.task == "adversary":

@@ -41,20 +41,20 @@ def find_similar_questions(dataset: Dataset, args):
     index = build_index_with_ids(embedding, "/data/seongilpark/index", "question", is_save=False)
     assert len(questions) == len(dataset), "There is a not unique question in the dataset"
     new_context = []
-    answers = dataset["answer_in_context"]
+    answers = dataset["answers"]
     contexts = dataset["context"]
 
-    for i, query in tqdm(enumerate(embedding), total=len(embedding), desc="Faiss question searching..."):
-        _, I = index.search(np.array([query]).astype("float32"), args.topk+1)
+    _, I = index.search(embedding, args.topk)
+    nearest_neighbors = I[:, 1:] # [len(query_vectors), topk-1]
+    for neighbors, answer in tqdm(zip(nearest_neighbors, answers), desc="Faiss question searching...", total=len(nearest_neighbors)):
         is_valid = False
-        nearest_neighbors = I[0][1:] # [topk]
-        for idx in nearest_neighbors:
-            if not has_answer([answers[i]], contexts[idx], simple_tokenizer):
+        for idx in neighbors:
+            if not has_answer(answer, contexts[idx], simple_tokenizer):
                 new_context.append(contexts[idx])
                 is_valid = True
                 break
         if not is_valid:
-            print(f"There is no similar context -> Orignal Answers: {answers[i]}")
+            print(f"There is no similar context -> Orignal Answers: {answer}")
             new_context.append(None)
     assert len(new_context) == len(dataset), f"Length doesn't match {len(new_context)} != {len(dataset)}"
     dataset = dataset.add_column("Q_similar_context", new_context)
@@ -66,22 +66,49 @@ def find_similar_contexts(dataset: Dataset, args):
     embedding, contexts = dpr_embed(dataset=dataset, col="context", args=args)
     embedding = np.array(embedding).astype('float32')
     c2embs = {c:emb for c, emb in zip(contexts, embedding)}
-    index = build_index_with_ids(embedding, save_dir="", name="", is_save=False)
+    c2ids = {c:i for i, c in enumerate(contexts)}
+    index = build_index_with_ids(embedding, save_dir="/data/seongilpark/index", name="context", is_save=False)
     old2new_context = dict()
+    _, I = index.search(embedding, args.topk)
+    nearest_neighbors = I[:, 1:] # [len(contexts), topk-1]
     for i, row in tqdm(enumerate(dataset), total=len(dataset), desc="Faiss contexts searching..."):
-        query_context_emb = c2embs[row["context"]]
-        answers = [row["answer_in_context"]]
-        _, I = index.search(np.array([query_context_emb]).astype("float32"), args.topk+1)
+        query_context_id = c2ids[row["context"]]
+        answers = row["answers"]
+        neighbors = nearest_neighbors[query_context_id]
         is_valid = False
-        nearest_neighbors = I[0][1:]
-        for idx in nearest_neighbors:
+        for idx in neighbors:
             if not has_answer(answers, contexts[idx], simple_tokenizer):
                 old2new_context[row["context"]] = contexts[idx]
                 is_valid = True
                 break
         if not is_valid:
-            print(f"There is no similar context -> Orignal Answers : {answers}")
+            print(f"There is no similar context -> Orignal Answers : {row['answers']}")
             old2new_context[row["context"]] = None
+    # for neighbors, answer, context in tqdm(
+    #     zip(nearest_neighbors, dataset["answers"], contexts), desc="Faiss contexts searching...", total=len(nearest_neighbors)):
+    #     is_valid = False
+    #     for idx in neighbors:
+    #         if not has_answer(answer, contexts[idx], simple_tokenizer):
+    #             old2new_context[context] = contexts[idx]
+    #             is_valid = True
+    #             break
+    #     if not is_valid:
+    #         print(f"There is no similar context -> Orignal Answers : {answer}")
+    #         old2new_context[context] = None
+    # for i, row in tqdm(enumerate(dataset), total=len(dataset), desc="Faiss contexts searching..."):
+    #     query_context_emb = c2embs[row["context"]]
+    #     answers = row["answers"]
+    #     _, I = index.search(np.array([query_context_emb]).astype("float32"), args.topk)
+    #     is_valid = False
+    #     nearest_neighbors = I[0][1:]
+    #     for idx in nearest_neighbors:
+    #         if not has_answer(answers, contexts[idx], simple_tokenizer):
+    #             old2new_context[row["context"]] = contexts[idx]
+    #             is_valid = True
+    #             break
+    #     if not is_valid:
+    #         print(f"There is no similar context -> Orignal Answers : {answers}")
+    #         old2new_context[row["context"]] = None
     assert len(old2new_context) == len(contexts), f"Length doesn't match {len(old2new_context)} != {len(contexts)}"
     dataset = dataset.map(lambda x: {"C_similar_context": old2new_context[x["context"]]}, num_proc=8)
     dataset = dataset.filter(lambda x: x["C_similar_context"] is not None, num_proc=8)
@@ -91,26 +118,42 @@ def find_similar_contexts_with_questions(q_embs, c2embs, dataset: Dataset, args)
     simple_tokenizer = SimpleTokenizer()
     embedding = []
     contexts = dataset["context"]
-    answers = dataset["answer_in_context"]
+    answers = dataset["answers"]
     for i in range(len(dataset)):
         q_emb = q_embs[i]
         c_emb = c2embs[contexts[i]]
         embedding.append(args.alpha * q_emb + (1-args.alpha) * c_emb)
     embedding = np.array(embedding).astype('float32')
-    index = build_index_with_ids(embedding, save_dir="", name="", is_save=False)
+    index = build_index_with_ids(embedding, save_dir="/data/seongilpark/index", name="question-context", is_save=False)
+    _, I = index.search(embedding, args.topk)
+    nearest_neighbors = I[:, 1:] # [len(contexts), topk-1]
     new_context = []
-    for i, query in tqdm(enumerate(embedding), total=len(embedding), desc="Faiss mixed searching..."):
-        _, I = index.search(np.array([query]).astype("float32"), args.topk+1)
+    for neighbors, answer in tqdm(
+        zip(nearest_neighbors, answers), desc="Faiss mixed searching...", total=len(nearest_neighbors)):
         is_valid = False
-        nearest_neighbors = I[0][1:] # [topk]
-        for idx in nearest_neighbors:
-            if not has_answer([answers[i]], contexts[idx], simple_tokenizer):
+        for idx in neighbors:
+            if not has_answer(answer, contexts[idx], simple_tokenizer):
                 new_context.append(contexts[idx])
                 is_valid = True
                 break
         if not is_valid:
-            print(f"There is no similar context -> Orignal Answers: {answers[i]}")
+            print(f"There is no similar context -> Orignal Answers : {answer}")
             new_context.append(None)
+    
+    
+    # new_context = []
+    # for i, query in tqdm(enumerate(embedding), total=len(embedding), desc="Faiss mixed searching..."):
+    #     _, I = index.search(np.array([query]).astype("float32"), args.topk)
+    #     is_valid = False
+    #     nearest_neighbors = I[0][1:] # [topk]
+    #     for idx in nearest_neighbors:
+    #         if not has_answer(answers[i], contexts[idx], simple_tokenizer):
+    #             new_context.append(contexts[idx])
+    #             is_valid = True
+    #             break
+    #     if not is_valid:
+    #         print(f"There is no similar context -> Orignal Answers: {answers[i]}")
+    #         new_context.append(None)
     assert len(new_context) == len(dataset), "Length doesn't match"
     dataset = dataset.add_column("QC_similar_context", new_context)
     dataset = dataset.filter(lambda x: x["QC_similar_context"] is not None, num_proc=8)
@@ -122,12 +165,12 @@ def find_random_contexts(dataset: Dataset):
     new_context = []
     for row in tqdm(dataset, desc="Finding random contexts..."):
         max_count = 0
-        a = row["answer_in_context"]
+        a = row["answers"]
         random_ctx = random.choice(contexts)
-        while has_answer([a], random_ctx, simple_tokenizer) and max_count < 100:
+        while has_answer(a, random_ctx, simple_tokenizer) and max_count < 10:
             random_ctx = random.choice(contexts)
             max_count += 1
-        if max_count < 100:
+        if max_count < 10:
             new_context.append(random_ctx)
         else:
             new_context.append(None)
@@ -149,7 +192,7 @@ def search_topk_without_same_answers(queries: list[str],
     # Op2에서 id2vec은 key : context_id, value : context
     # Op3에서 id2vec은 key : context_id, value : context+question
     simple_tokenizer = SimpleTokenizer()
-    D, I = index.search(query_vectors, args.topk+1)
+    D, I = index.search(query_vectors, args.topk)
     output = dict()
     nearest_neighbors = I[:, 1:] # [len(query_vectors), topk]
     similarities = D[:, 1:] # [len(query_vectors), topk]

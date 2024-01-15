@@ -14,14 +14,17 @@ def build_multiple_indexes(input_dict: Dict, subsets: List[str]):
     return output
 
 def build_index_with_ids(vectors: np.ndarray, save_dir: str, name: str, is_save: bool = True):
+    res = faiss.StandardGpuResources()
     index_flat = faiss.IndexFlatIP(len(vectors[0]))
     index = faiss.IndexIDMap(index_flat)
+    gpu_index = faiss.index_cpu_to_gpu(res, 0, index)
     ids = np.arange(len(vectors)).astype('int64')
-    index.add_with_ids(vectors, ids)
+    gpu_index.add_with_ids(vectors, ids)
     if is_save:
+        faiss.gpu_to_cpu(index)
         faiss.write_index(index, f"{save_dir}/{name}.index")
         print(f"{name} Index saved")
-    return index
+    return gpu_index
 
 def load_index(index_path):
     return faiss.read_index(index_path)
