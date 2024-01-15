@@ -25,9 +25,9 @@ def masking(doc) -> str:
 def query_masking(nlp, dataset: Dataset):
     ctxs = dataset["question"]
     result = []
-    for i in tqdm(range(0, len(ctxs), 1000), desc="Masking..."):
-        batch = ctxs[i:i+1000]
-        batch_docs = list(nlp.pipe(batch, batch_size=1000))
+    for i in tqdm(range(0, len(ctxs), 2000), desc="Masking..."):
+        batch = ctxs[i:i+2000]
+        batch_docs = list(nlp.pipe(batch, batch_size=2000))
         masked_quries = [masking(doc) for doc in batch_docs]
         result.extend(masked_quries)
     assert len(result) == len(ctxs), "Length doesn't match"
@@ -38,12 +38,11 @@ def query_embedding(model, tokenizer, dataset: Dataset, args):
     result = []
     for i in tqdm(range(0, len(queries), args.batch_size), desc="Embedding..."):
         batch = queries[i:i+args.batch_size]
-        output = tokenizer(batch, padding="max_length", truncation=True, max_length=128, return_tensors="pt").to("cuda")
+        output = tokenizer(batch, padding="max_length", truncation=True, max_length=64, return_tensors="pt").to("cuda")
         with torch.no_grad():
             embeddings = model(**output).pooler_output.detach().cpu().numpy() # [args.batch_size, hidden_dim]
         result.extend([emb for emb in embeddings])
     assert len(result) == len(queries), "Length doesn't match"
-    dataset = dataset.remove_columns("masked_query")
     return dataset.add_column("query_embedding", result)
 
 # def remove_duplicate(data: Dataset):

@@ -1,11 +1,7 @@
-import os
 from dataset import split_sentence, preprocess_text
 from datasets import load_dataset
 import pandas as pd
 import numpy as np
-import faiss
-import re
-import time
 from tqdm.auto import tqdm
 from datasets import Dataset, DatasetDict, concatenate_datasets
 import spacy
@@ -73,8 +69,8 @@ def generate_unans(args, dataset):
     dataset = find_random_contexts(dataset)
     wandb.init(project="craft-cases", name="unanswerable" if not args.test else "test-unanswerable", config=vars(args))
     df = pd.DataFrame(dataset)
-    df = df.answer_in_context.apply(lambda x: ", ".join(x))
-    df = df[["question","context","answer_in_context","C_similar_context","QC_similar_context","random_context"]].sample(100)
+    df["answer_in_context"] = df["answer_in_context"].apply(lambda x: ", ".join(x))
+    df = df[["question","context","answer_in_context","Q_similar_context","C_similar_context","QC_similar_context","random_context"]].sample(100)
     wandb.log({"samples": wandb.Table(dataframe=df)})
     if not args.test:
         dataset.push_to_hub("Atipico1/mrqa_unanswerable_v2")

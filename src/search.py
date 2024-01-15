@@ -1,5 +1,6 @@
 import torch
 import random
+import joblib, os
 from datasets import Dataset, DatasetDict
 from tqdm.auto import tqdm
 from src.index import build_index_with_ids
@@ -10,8 +11,14 @@ import unicodedata
 import faiss
 from transformers import AutoTokenizer, DPRQuestionEncoder, DPRContextEncoder
 
-def dpr_embed(dataset: Dataset, col: str, args) -> list[np.ndarray]:
+def dpr_embed(dataset: Dataset, col: str, args) -> list[np.ndarray]:     
     inputs = list(set(dataset[col]))
+    if not args.test:
+        if os.path.exists(f"/data/seongilpark/{col}_embeddings.pkl"):
+            cached_array = joblib.load(f"/data/seongilpark/{col}_embeddings.pkl")
+            if len(cached_array) == len(inputs):
+                print(f"{col} embeddings already exist")
+                return cached_array, inputs
     result = []
     if col == "q":
         tokenizer = AutoTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
@@ -32,6 +39,9 @@ def dpr_embed(dataset: Dataset, col: str, args) -> list[np.ndarray]:
             result.extend([emb for emb in embeddings])
     normalized_arrays = [arr / np.linalg.norm(arr) for arr in result]
     assert len(normalized_arrays) == len(result), "Length doesn't match"
+    if not args.test:
+        joblib.dump(normalized_arrays, f"/data/seongilpark/{col}_embeddings.pkl")
+        print(f"{col} embeddings saved")
     return normalized_arrays, inputs
                 
 def find_similar_questions(dataset: Dataset, args):
@@ -84,31 +94,6 @@ def find_similar_contexts(dataset: Dataset, args):
         if not is_valid:
             print(f"There is no similar context -> Orignal Answers : {row['answers']}")
             old2new_context[row["context"]] = None
-    # for neighbors, answer, context in tqdm(
-    #     zip(nearest_neighbors, dataset["answers"], contexts), desc="Faiss contexts searching...", total=len(nearest_neighbors)):
-    #     is_valid = False
-    #     for idx in neighbors:
-    #         if not has_answer(answer, contexts[idx], simple_tokenizer):
-    #             old2new_context[context] = contexts[idx]
-    #             is_valid = True
-    #             break
-    #     if not is_valid:
-    #         print(f"There is no similar context -> Orignal Answers : {answer}")
-    #         old2new_context[context] = None
-    # for i, row in tqdm(enumerate(dataset), total=len(dataset), desc="Faiss contexts searching..."):
-    #     query_context_emb = c2embs[row["context"]]
-    #     answers = row["answers"]
-    #     _, I = index.search(np.array([query_context_emb]).astype("float32"), args.topk)
-    #     is_valid = False
-    #     nearest_neighbors = I[0][1:]
-    #     for idx in nearest_neighbors:
-    #         if not has_answer(answers, contexts[idx], simple_tokenizer):
-    #             old2new_context[row["context"]] = contexts[idx]
-    #             is_valid = True
-    #             break
-    #     if not is_valid:
-    #         print(f"There is no similar context -> Orignal Answers : {answers}")
-    #         old2new_context[row["context"]] = None
     assert len(old2new_context) == len(contexts), f"Length doesn't match {len(old2new_context)} != {len(contexts)}"
     dataset = dataset.map(lambda x: {"C_similar_context": old2new_context[x["context"]]}, num_proc=8)
     dataset = dataset.filter(lambda x: x["C_similar_context"] is not None, num_proc=8)
@@ -139,21 +124,6 @@ def find_similar_contexts_with_questions(q_embs, c2embs, dataset: Dataset, args)
         if not is_valid:
             print(f"There is no similar context -> Orignal Answers : {answer}")
             new_context.append(None)
-    
-    
-    # new_context = []
-    # for i, query in tqdm(enumerate(embedding), total=len(embedding), desc="Faiss mixed searching..."):
-    #     _, I = index.search(np.array([query]).astype("float32"), args.topk)
-    #     is_valid = False
-    #     nearest_neighbors = I[0][1:] # [topk]
-    #     for idx in nearest_neighbors:
-    #         if not has_answer(answers[i], contexts[idx], simple_tokenizer):
-    #             new_context.append(contexts[idx])
-    #             is_valid = True
-    #             break
-    #     if not is_valid:
-    #         print(f"There is no similar context -> Orignal Answers: {answers[i]}")
-    #         new_context.append(None)
     assert len(new_context) == len(dataset), "Length doesn't match"
     dataset = dataset.add_column("QC_similar_context", new_context)
     dataset = dataset.filter(lambda x: x["QC_similar_context"] is not None, num_proc=8)
@@ -177,33 +147,7 @@ def find_random_contexts(dataset: Dataset):
     assert len(new_context) == len(dataset), "Length doesn't match"
     dataset = dataset.add_column("random_context", new_context)
     dataset = dataset.filter(lambda x: x["random_context"] is not None, num_proc=8)
-    return dataset
-# Op1 : 가장 비슷한 question의 context
-# Op2 : 가장 비슷한 context
-# Op3 : 가장 비슷한 context+question
-
-def search_topk_without_same_answers(queries: list[str],
-                                     query_answers: list[list[str]],
-                                     query_vectors: np.ndarray,
-                                     index,
-                                     id2vec: dict,
-                                     args) -> dict[str, str]:
-    # Op1에서 id2vec은 key : question_id, value : context
-    # Op2에서 id2vec은 key : context_id, value : context
-    # Op3에서 id2vec은 key : context_id, value : context+question
-    simple_tokenizer = SimpleTokenizer()
-    D, I = index.search(query_vectors, args.topk)
-    output = dict()
-    nearest_neighbors = I[:, 1:] # [len(query_vectors), topk]
-    similarities = D[:, 1:] # [len(query_vectors), topk]
-    for neighbors, similarity, answers, query in tqdm(
-        zip(nearest_neighbors, similarities, query_answers, queries), desc="Searching...", total=len(queries)
-        ):
-        for idx, score in zip(neighbors, similarity):
-            if not has_answer(answers, id2vec[idx], simple_tokenizer):
-                output[query] = id2vec[idx]
-    return output
-                
+    return dataset             
 
 ## From Contriever repo : https://github.com/facebookresearch/contriever/blob/main/src/evaluation.py#L23
 
