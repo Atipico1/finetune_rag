@@ -60,7 +60,7 @@ def preprocess(args, mrqa):
     else:
         mrqa = mrqa.remove_columns(["context","context_tokens","question_tokens","detected_answers"])
         mrqa = mrqa.rename_column("short_context", "context")
-        mrqa.push_to_hub("Atipico1/mrqa_preprocessed_v2")
+        mrqa.push_to_hub("Atipico1/mrqa_preprocessed")
 
 def generate_unans(args, dataset):
     dataset, q_embs = find_similar_questions(dataset, args)
