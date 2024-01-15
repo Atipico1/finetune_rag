@@ -1,10 +1,10 @@
 #!/bin/sh
-#SBATCH -J seongil-rag
+#SBATCH -J case
 #SBATCH -p gpu
 #SBATCH --nodes=1
-#SBATCH --nodelist=n02
+#SBATCH --nodelist=n01
 #SBATCH --ntasks-per-node=8
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --mem=64G
 #SBATCH -o log/case.out
 #SBATCH -e log/case.err
@@ -12,8 +12,6 @@
 
 python case.py \
  --qa_dataset Atipico1/popQA_preprocessed \
- --qa_split all \
  --test False \
  --printing True \
- --short_ctx True \
- --short_ctx_len 150
+ --add_squad2 True
