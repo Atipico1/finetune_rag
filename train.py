@@ -1,7 +1,6 @@
-import os
-os.environ["CUDA_VISIBLE_DEVICES"]="3,4,5,6"
-import torch, wandb, os
+import torch, wandb
 import numpy as np
+from dataset import preprocess_cbr_dataset, determine_answerable
 from src.script_arguments import ScriptArguments
 from src.utils import normalize_question
 from datasets import load_dataset, Dataset
@@ -17,6 +16,22 @@ from transformers import (
 )
 # os.environ["WANDB_PROJECT"] = "finetune-robust-rag"
 
+class QADataCollator(DataCollatorForLanguageModeling):
+    answer_start_token_id = 835  # "###" token id
+
+    def __call__(self, examples):
+        batch = super().__call__(examples)
+
+        # Only apply cross entropy loss to the answer part of the labels
+        for idx, label in enumerate(batch["labels"]):
+            answer_end = torch.where(label == -100)[0][0]
+            answer_start = torch.where(label == self.answer_start_token_id)[0][-1]
+            label[:answer_start+3] = -100
+            label[answer_end] = 2
+            batch["labels"][idx] = label
+
+        return batch
+    
 def make_case_text(case_exs):
     output = "[CASE]\n"
     for case_ex in case_exs:
@@ -46,25 +61,6 @@ def formatting_for_cbr(example):
         text = case_text + f"### Background:\n{ctxs}\n\n ### Q: {q}\n### A: {example['answers'][i][0]}</s>"
         output_texts.append(text)
     return output_texts
-
-def _preprocess_dataset(dataset, args):
-    if "case" in args.dataset_name.lower():
-        columns_names = dataset.column_names
-        if "case" in columns_names:
-            if args.num_cases == "random":
-                ceiling = len(dataset["case"][0])
-                return dataset.map(lambda x: {"case": sorted(x["case"], key=lambda y: float(y["distance"]), reverse=True)[:np.random.randint(1, ceiling+1)]})
-            return dataset.map(lambda x: {"case": sorted(x["case"], key=lambda y: float(y["distance"]), reverse=True)[:args.num_cases]})
-        else:
-            for col in columns_names:
-                if "case" in col:
-                    dataset = dataset.rename_column(col, "case")
-                    if args.num_cases == "random":
-                        ceiling = len(dataset["case"][0])
-                        return dataset.map(lambda x: {"case": sorted(x["case"], key=lambda y: float(y["distance"]), reverse=True)[:np.random.randint(1, ceiling+1)]})
-                    return dataset.map(lambda x: {"case": sorted(x["case"], key=lambda y: float(y["distance"]), reverse=True)[:args.num_cases]})
-    else:
-        return dataset
     
 def main(args):
     global num_contexts
@@ -73,6 +69,33 @@ def main(args):
         args.num_cases = int(args.num_cases)
     except:
         pass
+    dataset = load_dataset(args.dataset_name, split="train")
+    if args.cbr:
+        dataset = preprocess_cbr_dataset(dataset, args)
+    response_template = "### A:"
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name, trust_remote_code=True
+    )
+    tokenizer.padding_side = "right"
+    tokenizer.pad_token = tokenizer.unk_token
+    #collator = DataCollatorForCompletionOnlyLM(tokenizer.encode(response_template, add_special_tokens = False)[2:], tokenizer=tokenizer, mlm=False)
+    collator = QADataCollator(tokenizer=tokenizer, mlm=False)
+    if args.unanswerable:
+        dataset = dataset.map(lambda x: {"answers": determine_answerable(x)})
+    formatting_func = formatting_for_cbr if args.cbr else formatting_for_original
+    wandb.init(
+        project='finetune-robust-rag', 
+        job_type="training",
+        name=args.run_name if not args.test else "test",
+        config=vars(args)
+        )
+    samples = formatting_func(dataset[:20])
+    max_length = max(tokenizer(formatting_func(dataset[:]), return_length=True)["length"])
+    print("Max length: ", max_length)
+    sample_table = wandb.Table(columns=["idx", "sample"], data=[[i, sample]for i, sample in enumerate(samples)])
+    wandb.log({"samples": sample_table})
+    if args.test:
+        raise ValueError("Test mode")
     bnb_config = BitsAndBytesConfig(
             load_in_8bit=args.load_in_8bit, load_in_4bit=args.load_in_4bit
         )
@@ -84,11 +107,6 @@ def main(args):
         torch_dtype=torch.bfloat16,
         load_in_4bit=True,
         attn_implementation="flash_attention_2")
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name, trust_remote_code=True
-    )
-    tokenizer.padding_side = "right"
-    tokenizer.pad_token = tokenizer.unk_token
     training_args = TrainingArguments(
         output_dir=args.output_dir+args.run_name,
         per_device_train_batch_size=args.batch_size,
@@ -116,13 +134,6 @@ def main(args):
                 bias="none",
                 task_type="CAUSAL_LM"
                 )
-    
-    dataset = load_dataset(args.dataset_name, split="train")
-    dataset = _preprocess_dataset(dataset, args)
-    response_template = "### A:"
-    collator = DataCollatorForCompletionOnlyLM(tokenizer.encode(response_template, add_special_tokens = False)[2:], tokenizer=tokenizer, mlm=False)
-    #collator = QADataCollator(tokenizer=tokenizer, mlm=False)
-    formatting_func = formatting_for_cbr if args.num_cases > 0 else formatting_for_original
     trainer = SFTTrainer(
             model=model,
             train_dataset=dataset,
@@ -133,15 +144,6 @@ def main(args):
             data_collator=collator,
             formatting_func=formatting_func,
         )
-    wandb.init(
-        project='finetune-robust-rag', 
-        job_type="training",
-        name=args.run_name,
-        config=vars(args)
-        )
-    samples = formatting_func(dataset[:10])
-    sample_table = wandb.Table(columns=["idx", "sample"], data=[[i, sample]for i, sample in enumerate(samples)])
-    wandb.log({"samples": sample_table})
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)

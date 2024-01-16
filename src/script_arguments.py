@@ -47,7 +47,6 @@ class ScriptArguments:
     )
     save_strategy: Optional[str] = field(default="epoch", metadata={"help": "The checkpoint save strategy to use."})
     num_contexts: Optional[int] = field(default=1, metadata={"help": "Number of contexts to use for training"})
-    num_cases: Optional[Union[int, str]] = field(default=0, metadata={"help": "Number of cases to use for training"})
     save_total_limit: Optional[int] = field(default=10, metadata={"help": "Limits total number of checkpoints."})
     push_to_hub: Optional[bool] = field(default=True, metadata={"help": "Push the model to HF Hub"})
     gradient_checkpointing: Optional[bool] = field(
@@ -64,3 +63,12 @@ class ScriptArguments:
     )
     hub_model_id: Optional[str] = field(default=None, metadata={"help": "The name of the model on HF Hub"})
     resume_from_checkpoint: Optional[bool] = field(default=False, metadata={"help": "Resume from checkpoint"})
+    cbr: Optional[bool] = field(default=False, metadata={"help": "Use CBR"})
+    cbr_alpha: Optional[float] = field(default=0.5, metadata={"help": "Alpha for CBR"})
+    cbr_original: Optional[int] = field(default=0, metadata={"help": "Number of original cases for CBR"})
+    cbr_unans: Optional[int] = field(default=0, metadata={"help": "Number of unanswerable cases for CBR"})
+    cbr_adv: Optional[int] = field(default=0, metadata={"help": "Number of adversary cases for CBR"})
+    cbr_conflict: Optional[int] = field(default=0, metadata={"help": "Number of conflict cases for CBR"})
+    test: Optional[bool] = field(default=False, metadata={"help": "Test mode"})
+    unanswerable: Optional[bool] = field(default=False, metadata={"help": "Unanswerable mode"})
+    
