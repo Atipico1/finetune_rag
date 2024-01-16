@@ -1,7 +1,7 @@
 import argparse
 import numpy as np
 import faiss
-from src.utils import str2bool
+from src.utils import normalize_answer, str2bool
 from datasets import load_dataset, Dataset, DatasetDict
 from collections import defaultdict
 from tqdm.auto import tqdm
@@ -73,14 +73,22 @@ def make_indexs_for_case(case_dataset: Dataset, key: str, args):
             output[head_word].append(({"question":row["question"], "context":row["context"],"answer":row["answer_in_context"][0]}, row["query_embedding"]))
     return build_multiple_indexes(output, [k for k in output.keys()])
 
+def _filter_same_question(case_set: Dataset, qa_set: Dataset):
+    qa_unique_questions = []
+    for subset in qa_set.keys():
+        qa_unique_questions.extend(list(set([normalize_answer(q) for q in qa_set[subset]["question"]])))
+    return case_set.filter(lambda x: normalize_answer(x["question"]) not in qa_unique_questions, num_proc=8)
+
 def main(args):
     qa_dataset = load_dataset(args.qa_dataset)
     if args.test:
         for subset in qa_dataset.keys():
             qa_dataset[subset] = qa_dataset[subset].select(range(1000))
             print(f"{args.qa_dataset} {subset} Loaded! -> Size : {len(qa_dataset[subset])}")
-    original_case = load_dataset("Atipico1/mrqa_preprocessed_v2", split="train")
-    unans_case = load_dataset("Atipico1/mrqa_unanswerable_v2", split="train")
+    original_case = load_dataset("Atipico1/mrqa_preprocessed", split="train")
+    original_case = _filter_same_question(original_case, qa_dataset["train"])
+    unans_case = load_dataset("Atipico1/mrqa_unanswerable", split="train")
+    unans_case = _filter_same_question(unans_case, qa_dataset["train"])
     original_case_index = make_indexs_for_case(original_case, "original", args)
     unans_case_index = make_indexs_for_case(unans_case, "unanswerable", args)
     for subset in qa_dataset.keys():
