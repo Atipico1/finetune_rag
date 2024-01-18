@@ -2,9 +2,8 @@
 #SBATCH -J rag
 #SBATCH -p gpu
 #SBATCH --nodes=1
-#SBATCH --nodelist=n02
 #SBATCH --ntasks-per-node=16
-#SBATCH --gres=gpu:A6000:5
+#SBATCH --gres=gpu:1
 #SBATCH --mem=80G
 #SBATCH -o log/rag.out
 #SBATCH -e log/rag.err
@@ -12,7 +11,7 @@
 
 export CUDA_VISIBLE_DEVICES=0,2,3,4,5
 python train.py \
- --run_name NQ-cbr-unans \
+ --run_name NQ-cbr-unans-test \
  --dataset_name Atipico1/NQ-10k_preprocessed_with_o-u_case \
  --learning_rate 5e-5 \
  --batch_size 8 \

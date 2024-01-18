@@ -5,6 +5,8 @@ from collections import defaultdict
 from src.search import SimpleTokenizer, has_answer
 from src.utils import normalize_question
 import joblib
+import torch
+from transformers import DataCollatorForLanguageModeling
 
 #ANSWER_POS = ["ADV", "ADJ", "NOUN", "NUM", "SYM", "PROPN"]
 EDIT_CANDIDATE_POS = ["VERB", "NOUN", "ADJ", "ADV"]
@@ -129,9 +131,9 @@ def annotate_answer_type(dataset, map_dict: dict, args):
 
 def filter_and_sort(data):
     sorted_data = sorted(data, key=lambda x: float(x["distance"]), reverse=True)
-    filtered_data = [d for d in sorted_data if "<Tr>" not in d["context"]]
+    filtered_data = [d for d in sorted_data if ("<Tr>" not in d["context"]) and (len(d["answer"].split()) < 15)]
     if filtered_data == []:
-        raise ValueError("No Only text data!")
+        print([len(d["answer"].split()) for d in sorted_data])
     return filtered_data
 
 def aggregate_cases(example, args):
@@ -146,12 +148,18 @@ def aggregate_cases(example, args):
         output.extend(filter_and_sort(example["conflict_case"])[:args.cbr_conflict])
     random.shuffle(output)
     if len(output) == 0:
-        raise ValueError("No cases!")
+        #raise ValueError("No cases!")
+        print(output)
     
     return output
     
-def preprocess_cbr_dataset(dataset, args):
-    dataset = dataset.map(lambda x: {"case": aggregate_cases(x, args)}, num_proc=8, desc="Aggregating cases...")
+def preprocess_dataset(dataset, args):
+    if args.cbr:
+        dataset = dataset.map(lambda x: {"case": aggregate_cases(x, args)}, num_proc=8, desc="Aggregating cases...")
+    if args.unanswerable:
+        dataset = dataset.map(lambda x: {"answers": determine_answerable(x)}, num_proc=8, desc="Determining answerable...")
+    dataset = dataset.map(lambda x: {"question": normalize_question(x["question"])}, num_proc=8, desc="Normalizing question...")
+    dataset = dataset.map(lambda x: {"ctxs": x["ctxs"][:args.num_contexts]}, num_proc=8, desc="Selecting contexts...")
     return dataset
 
 def determine_answerable(example):
@@ -160,7 +168,99 @@ def determine_answerable(example):
         return ["unanswerable"]
     else:
         return example["answers"]
+
+def make_case_text(case_exs):
+    output = "[CASE]\n"
+    for case_ex in case_exs:
+        q, c, a = case_ex["question"], case_ex["context"], case_ex["answer"]
+        output += f"Background:\nDoc 0: {c}\nQ: {q}\nA: {a}\n\n"
+    output += "[/CASE]\n\n"
+    return output
+
+def make_custom_case_text(case_exs):
+    output = "[CASE]\n"
+    for case_ex in case_exs:
+        q, c, a = case_ex["question"], case_ex["context"], case_ex["answer"]
+        output += f"Background:\nDoc 0: {c.replace('####', ' ')}\nQ: {q}\n####A: {a}\n####\n\n"
+    output += "[/CASE]\n\n"
+    return output
+
+def formatting_for_original(example):
+    output_texts = []
+    for i in range(len(example['question'])):
+        if len(example["ctxs"]) == 0:
+            text = f"### Q: {example['question'][i]}\n ### A: {example['answers'][i][0]}</s>"
+        else:
+            ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i])])
+            text = f"### Background:\n{ctxs}\n ### Q: {example['question'][i]}\n ### A: {example['answers'][i][0]}</s>"
+        output_texts.append(text)
+    return output_texts
+
+def old_formatting_for_original(example):
+    output_texts = []
+    for i in range(len(example['question'])):
+        if len(example["ctxs"]) == 0:
+            text = f"### Q: {example['question'][i]}\n ### A: {example['answers'][i][0]}</s>"
+        else:
+            ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i])])
+            text = f"### Background:\n{ctxs}\n ### Q: {example['question'][i]}\n### A: {example['answers'][i][0]}</s>"
+        output_texts.append(text)
+    return output_texts
+
+def formatting_for_cbr(example):
+    output_texts = []
+    for i in range(len(example['question'])):
+        ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i])])  
+        case_text = make_case_text(example["case"][i])
+        text = case_text + f"### Background:\n{ctxs}\n ### Q: {example['question'][i]}\n ### A: {example['answers'][i][0]}</s>"
+        output_texts.append(text)
+    return output_texts
+
+def old_formatting_for_cbr(example):
+    output_texts = []
+    for i in range(len(example['question'])):
+        ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i])])  
+        case_text = make_case_text(example["case"][i])
+        text = case_text + f"### Background:\n{ctxs}\n ### Q: {example['question'][i]}\n### A: {example['answers'][i][0]}</s>"
+        output_texts.append(text)
+    return output_texts
+
+def formatting_for_custom_loss(example):
+    output_texts = []
+    for i in range(len(example['question'])):
+        ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i])])  
+        case_text = make_custom_case_text(example["case"][i])
+        text = case_text + f"### Background:\n{ctxs}\n ### Q: {example['question'][i]}\n ### A: {example['answers'][i][0]}</s>"
+        output_texts.append(text)
+    return output_texts
+
+def get_formatting_func(args):
+    if args.cbr:
+        if args.custom_loss:
+            return formatting_for_custom_loss
+        return formatting_for_cbr
+    else:
+        return formatting_for_original
     
+class CustomDataCollator(DataCollatorForLanguageModeling):
+    answer_start_token_id = 835  # "_```"
+    case_answer_token_id = 4136
+    def __call__(self, examples):
+        batch = super().__call__(examples)
+        for idx, label in enumerate(batch["labels"]):
+            qa_answer_start = torch.where(label == 835)[0][-1]
+            case_answer_token_ids = torch.where(label == 4136)[0]
+            token_save = []
+            label_copy = label.clone()
+            for i in range(0, len(case_answer_token_ids), 2):
+                case_start, case_end = case_answer_token_ids[i:i+2]
+                token_save.append(label_copy[case_start+3:case_end])
+            label[:qa_answer_start+3] = -100
+            for i, tokens in zip(range(0, len(case_answer_token_ids), 2), token_save):
+                case_start, case_end = case_answer_token_ids[i], case_answer_token_ids[i+1]
+                label[case_start+3:case_end] = tokens
+            batch["labels"][idx] = label
+        return batch
 """
 1. text를 입력으로 받아서
 2. text의 pos를 알아낸 다음 (or entity)

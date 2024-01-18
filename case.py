@@ -70,7 +70,7 @@ def make_indexs_for_case(case_dataset: Dataset, key: str, args):
             head_word = row["question"].strip().lower().split()[0]
             if head_word not in WH_WORDS:
                 head_word = "original"
-            output[head_word].append(({"question":row["question"], "context":row["context"],"answer":row["answer_in_context"][0]}, row["query_embedding"]))
+            output[head_word].append(({"question":row["question"], "context":row["context"],"answer":"unanswerable"}, row["query_embedding"]))
     return build_multiple_indexes(output, [k for k in output.keys()])
 
 def _filter_same_question(case_set: Dataset, qa_set: Dataset):
@@ -86,9 +86,9 @@ def main(args):
             qa_dataset[subset] = qa_dataset[subset].select(range(1000))
             print(f"{args.qa_dataset} {subset} Loaded! -> Size : {len(qa_dataset[subset])}")
     original_case = load_dataset("Atipico1/mrqa_preprocessed", split="train")
-    original_case = _filter_same_question(original_case, qa_dataset["train"])
+    original_case = _filter_same_question(original_case, qa_dataset)
     unans_case = load_dataset("Atipico1/mrqa_unanswerable", split="train")
-    unans_case = _filter_same_question(unans_case, qa_dataset["train"])
+    unans_case = _filter_same_question(unans_case, qa_dataset)
     original_case_index = make_indexs_for_case(original_case, "original", args)
     unans_case_index = make_indexs_for_case(unans_case, "unanswerable", args)
     for subset in qa_dataset.keys():

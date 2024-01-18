@@ -1,9 +1,7 @@
 import torch, wandb
-import numpy as np
-from dataset import preprocess_cbr_dataset, determine_answerable
+from dataset import preprocess_dataset, get_formatting_func, CustomDataCollator
 from src.script_arguments import ScriptArguments
-from src.utils import normalize_question
-from datasets import load_dataset, Dataset
+from datasets import load_dataset
 from peft import LoraConfig
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 from transformers import (
@@ -11,78 +9,28 @@ from transformers import (
     BitsAndBytesConfig,
     HfArgumentParser,
     TrainingArguments,
-    AutoTokenizer,
-    DataCollatorForLanguageModeling
+    AutoTokenizer
 )
 # os.environ["WANDB_PROJECT"] = "finetune-robust-rag"
 
-class QADataCollator(DataCollatorForLanguageModeling):
-    answer_start_token_id = 835  # "###" token id
-
-    def __call__(self, examples):
-        batch = super().__call__(examples)
-
-        # Only apply cross entropy loss to the answer part of the labels
-        for idx, label in enumerate(batch["labels"]):
-            answer_end = torch.where(label == -100)[0][0]
-            answer_start = torch.where(label == self.answer_start_token_id)[0][-1]
-            label[:answer_start+3] = -100
-            label[answer_end] = 2
-            batch["labels"][idx] = label
-
-        return batch
-    
-def make_case_text(case_exs):
-    output = "[CASE]\n"
-    for case_ex in case_exs:
-        q, c, a = case_ex["question"], case_ex["context"], case_ex["answer"]
-        output += f"Background:\nDoc 0: {c}\nQ: {q}\nA: {a}\n\n"
-    output += "[/CASE]\n\n"
-    return output
-
-def formatting_for_original(example):
-    output_texts = []
-    for i in range(len(example['question'])):
-        q = normalize_question(example['question'][i])
-        if num_contexts == 0:
-            text = f"### Q: {q}\n### A: {example['answers'][i][0]}</s>"
-        else:
-            ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i][:num_contexts])])
-            text = f"### Background:\n{ctxs}\n\n### Q: {q}\n### A: {example['answers'][i][0]}</s>"
-        output_texts.append(text)
-    return output_texts
-
-def formatting_for_cbr(example):
-    output_texts = []
-    for i in range(len(example['question'])):
-        q = normalize_question(example['question'][i])
-        ctxs = "\n".join([f"Doc {idx}: {ctx['text']}" for idx, ctx in enumerate(example["ctxs"][i][:num_contexts])])  
-        case_text = make_case_text(example["case"][i])
-        text = case_text + f"### Background:\n{ctxs}\n\n ### Q: {q}\n### A: {example['answers'][i][0]}</s>"
-        output_texts.append(text)
-    return output_texts
-    
 def main(args):
     global num_contexts
     num_contexts = args.num_contexts
-    try:
-        args.num_cases = int(args.num_cases)
-    except:
-        pass
     dataset = load_dataset(args.dataset_name, split="train")
-    if args.cbr:
-        dataset = preprocess_cbr_dataset(dataset, args)
+    dataset = preprocess_dataset(dataset, args)
     response_template = "### A:"
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name, trust_remote_code=True
     )
     tokenizer.padding_side = "right"
     tokenizer.pad_token = tokenizer.unk_token
-    #collator = DataCollatorForCompletionOnlyLM(tokenizer.encode(response_template, add_special_tokens = False)[2:], tokenizer=tokenizer, mlm=False)
-    collator = QADataCollator(tokenizer=tokenizer, mlm=False)
-    if args.unanswerable:
-        dataset = dataset.map(lambda x: {"answers": determine_answerable(x)})
-    formatting_func = formatting_for_cbr if args.cbr else formatting_for_original
+    if args.custom_loss:
+        collator = CustomDataCollator(tokenizer=tokenizer, mlm=False)
+    else:
+        collator = DataCollatorForCompletionOnlyLM(tokenizer.encode(response_template, add_special_tokens = False)[2:], tokenizer=tokenizer, mlm=False)
+    #collator = QADataCollator(tokenizer=tokenizer, mlm=False)
+
+    formatting_func = get_formatting_func(args)
     wandb.init(
         project='finetune-robust-rag', 
         job_type="training",
