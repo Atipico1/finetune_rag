@@ -1,4 +1,5 @@
 import torch, wandb
+import pandas as pd
 from dataset import preprocess_dataset, get_formatting_func, CustomDataCollator
 from src.script_arguments import ScriptArguments
 from datasets import load_dataset
@@ -12,6 +13,21 @@ from transformers import (
     AutoTokenizer
 )
 # os.environ["WANDB_PROJECT"] = "finetune-robust-rag"
+
+def save_samples(dataset, args):
+    sample = dataset[:20]
+    formatting_func = get_formatting_func(args)
+    samples = formatting_func(sample)
+    sample = pd.DataFrame(sample)
+    sample["prompt"] = samples
+    sample["answers"] = sample["answers"].apply(lambda x: ", ".join(x) if len(x) > 1 else x[0])
+    cols = ["question", "answers", "prompt", "hasanswer"]
+    if args.unanswerable:
+        cols.insert(2, "original_answers")
+        sample["original_answers"] = sample["original_answers"].apply(lambda x: ", ".join(x) if len(x) > 1 else x[0])
+    sample = sample[cols]
+    sample_table = wandb.Table(dataframe=sample)
+    wandb.log({"samples": sample_table})
 
 def main(args):
     global num_contexts
@@ -37,11 +53,9 @@ def main(args):
         name=args.run_name if not args.test else "test",
         config=vars(args)
         )
-    samples = formatting_func(dataset[:20])
+    save_samples(dataset, args)
     max_length = max(tokenizer(formatting_func(dataset[:]), return_length=True)["length"])
     print("Max length: ", max_length)
-    sample_table = wandb.Table(columns=["idx", "sample"], data=[[i, sample]for i, sample in enumerate(samples)])
-    wandb.log({"samples": sample_table})
     if args.test:
         raise ValueError("Test mode")
     bnb_config = BitsAndBytesConfig(

@@ -48,7 +48,7 @@ class ScriptArguments:
     save_strategy: Optional[str] = field(default="epoch", metadata={"help": "The checkpoint save strategy to use."})
     num_contexts: Optional[int] = field(default=1, metadata={"help": "Number of contexts to use for training"})
     save_total_limit: Optional[int] = field(default=10, metadata={"help": "Limits total number of checkpoints."})
-    push_to_hub: Optional[bool] = field(default=True, metadata={"help": "Push the model to HF Hub"})
+    push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the model to HF Hub"})
     gradient_checkpointing: Optional[bool] = field(
         default=False, metadata={"help": "Whether to use gradient checkpointing or no"}
     )
@@ -71,4 +71,5 @@ class ScriptArguments:
     cbr_conflict: Optional[int] = field(default=0, metadata={"help": "Number of conflict cases for CBR"})
     test: Optional[bool] = field(default=False, metadata={"help": "Test mode"})
     unanswerable: Optional[bool] = field(default=False, metadata={"help": "Unanswerable mode"})
+    custom_loss: Optional[bool] = field(default=False, metadata={"help": "Custom loss"}) 
     

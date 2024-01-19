@@ -154,25 +154,23 @@ def aggregate_cases(example, args):
     return output
     
 def preprocess_dataset(dataset, args):
+    dataset = dataset.map(lambda x: {"question": normalize_question(x["question"])}, num_proc=8, desc="Normalizing question...")
+    dataset = dataset.map(lambda x: {"ctxs": x["ctxs"][:args.num_contexts]}, num_proc=8, desc="Selecting contexts...")
+    dataset = dataset.map(lambda x: {"hasanswer": determine_answerable(x)}, num_proc=8, desc="Determining answerable...")
     if args.cbr:
         dataset = dataset.map(lambda x: {"case": aggregate_cases(x, args)}, num_proc=8, desc="Aggregating cases...")
     if args.unanswerable:
-        dataset = dataset.map(lambda x: {"answers": determine_answerable(x)}, num_proc=8, desc="Determining answerable...")
-    dataset = dataset.map(lambda x: {"question": normalize_question(x["question"])}, num_proc=8, desc="Normalizing question...")
-    dataset = dataset.map(lambda x: {"ctxs": x["ctxs"][:args.num_contexts]}, num_proc=8, desc="Selecting contexts...")
+        dataset = dataset.map(lambda x: {"original_answers": x["answers"]}, num_proc=8, desc="Saving original answers...")
+        dataset = dataset.map(lambda x: {"answers": ["unanswerable"] if not x["hasanswer"] else x["answers"]}, num_proc=8, desc="Replacing answers...")
     return dataset
 
 def determine_answerable(example):
-    hasanswer = any([e["hasanswer"] for e in example["ctxs"]])
-    if hasanswer:
-        return ["unanswerable"]
-    else:
-        return example["answers"]
+    return any([e["hasanswer"] for e in example["ctxs"]])
 
 def make_case_text(case_exs):
     output = "[CASE]\n"
     for case_ex in case_exs:
-        q, c, a = case_ex["question"], case_ex["context"], case_ex["answer"]
+        q, c, a = normalize_question(case_ex["question"]), case_ex["context"], case_ex["answer"]
         output += f"Background:\nDoc 0: {c}\nQ: {q}\nA: {a}\n\n"
     output += "[/CASE]\n\n"
     return output
@@ -180,7 +178,7 @@ def make_case_text(case_exs):
 def make_custom_case_text(case_exs):
     output = "[CASE]\n"
     for case_ex in case_exs:
-        q, c, a = case_ex["question"], case_ex["context"], case_ex["answer"]
+        q, c, a = normalize_question(case_ex["question"]), case_ex["context"], case_ex["answer"]
         output += f"Background:\nDoc 0: {c.replace('####', ' ')}\nQ: {q}\n####A: {a}\n####\n\n"
     output += "[/CASE]\n\n"
     return output
