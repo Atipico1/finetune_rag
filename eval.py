@@ -67,7 +67,7 @@ def main(args):
         framework="pt"
     )
     run_name = (args.prefix + "_") if args.prefix != "" else ""
-    run_name += args.model.split("/")[-2]
+    run_name += args.model.split("/")[-2] if len(args.model.split("/")) > 2 else args.model.split("/")[-1]
     if args.test:
         dataset = dataset.shuffle(seed=42)
         dataset = dataset.select(range(10))
