@@ -6,12 +6,14 @@ from src.search import SimpleTokenizer, has_answer
 from src.utils import normalize_question
 import joblib
 import torch
+from typing import List
 from transformers import DataCollatorForLanguageModeling
+import os
 
 #ANSWER_POS = ["ADV", "ADJ", "NOUN", "NUM", "SYM", "PROPN"]
 EDIT_CANDIDATE_POS = ["VERB", "NOUN", "ADJ", "ADV"]
 ANSWER_POS = ["ADV", "ADJ", "NOUN", "VERB", "NUM"]
-
+NUM_PROC = os.cpu_count()
 def _preprocess(text, subset_name: str):
     if subset_name == "NewsQA":
         start = text.find("--")
@@ -30,9 +32,9 @@ def _preprocess(text, subset_name: str):
     return text
 
 def preprocess_text(dataset: Dataset) -> Dataset:
-    dataset = dataset.map(lambda x: {"context": _preprocess(x["context"], x["subset"])}, num_proc=8, desc="Preprocessing...")
+    dataset = dataset.map(lambda x: {"context": _preprocess(x["context"], x["subset"])}, num_proc=NUM_PROC, desc="Preprocessing...")
     print("Before preprocess: ", len(dataset))
-    dataset = dataset.filter(lambda x: x["context"] is not None, num_proc=8)
+    dataset = dataset.filter(lambda x: x["context"] is not None, num_proc=NUM_PROC)
     print("After preprocess: ", len(dataset))
     return dataset
 
@@ -76,7 +78,7 @@ def split_sentence(dataset: Dataset, nlp, args):
     dataset = dataset.add_column("short_context", answer_passages)
     dataset = dataset.add_column("answer_sent", answer_sents)
     dataset = dataset.add_column("answer_in_context", answers_in_context)
-    dataset = dataset.filter(lambda x: x["short_context"] is not None and len(x["short_context"].split())< args.ctx_len, num_proc=8)
+    dataset = dataset.filter(lambda x: x["short_context"] is not None and len(x["short_context"].split())< args.ctx_len, num_proc=NUM_PROC)
     print("After split: ", len(dataset))
     return dataset
 
@@ -152,16 +154,29 @@ def aggregate_cases(example, args):
         print(output)
     
     return output
-    
+
+def find_answer_in_context(answers: List[str], ctxs: List[str], tokenizer):
+    for ans in answers:
+        for ctx in ctxs:
+            if has_answer([ans], ctx, tokenizer):
+                return ans
+    return answers[0]
+
 def preprocess_dataset(dataset, args):
-    dataset = dataset.map(lambda x: {"question": normalize_question(x["question"])}, num_proc=8, desc="Normalizing question...")
-    dataset = dataset.map(lambda x: {"ctxs": x["ctxs"][:args.num_contexts]}, num_proc=8, desc="Selecting contexts...")
-    dataset = dataset.map(lambda x: {"hasanswer": determine_answerable(x)}, num_proc=8, desc="Determining answerable...")
+    dataset = dataset.map(lambda x: {"question": normalize_question(x["question"])}, num_proc=NUM_PROC, desc="Normalizing question...")
+    dataset = dataset.map(lambda x: {"ctxs": x["ctxs"][:args.num_contexts]}, num_proc=NUM_PROC, desc="Selecting contexts...")
+    dataset = dataset.map(lambda x: {"hasanswer": determine_answerable(x)}, num_proc=NUM_PROC, desc="Determining answerable...")
+    if args.only_has_answer:
+        dataset = dataset.filter(lambda x: x["hasanswer"], num_proc=NUM_PROC)
+        print("After ONLY-HAS-ANSWER filtering: ", len(dataset))
+    if args.answer_in_context:
+        tokenizer = SimpleTokenizer()
+        dataset = dataset.map(lambda x: {"answers": [find_answer_in_context(x["answers"], x["ctxs"], tokenizer)]}, num_proc=NUM_PROC, desc="Finding answer in context...")
     if args.cbr:
-        dataset = dataset.map(lambda x: {"case": aggregate_cases(x, args)}, num_proc=8, desc="Aggregating cases...")
+        dataset = dataset.map(lambda x: {"case": aggregate_cases(x, args)}, num_proc=NUM_PROC, desc="Aggregating cases...")
     if args.unanswerable:
-        dataset = dataset.map(lambda x: {"original_answers": x["answers"]}, num_proc=8, desc="Saving original answers...")
-        dataset = dataset.map(lambda x: {"answers": ["unanswerable"] if not x["hasanswer"] else x["answers"]}, num_proc=8, desc="Replacing answers...")
+        dataset = dataset.map(lambda x: {"original_answers": x["answers"]}, num_proc=NUM_PROC, desc="Saving original answers...")
+        dataset = dataset.map(lambda x: {"answers": ["unanswerable"] if not x["hasanswer"] else x["answers"]}, num_proc=NUM_PROC, desc="Replacing answers...")
     return dataset
 
 def determine_answerable(example):
