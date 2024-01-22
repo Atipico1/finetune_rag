@@ -158,18 +158,18 @@ def aggregate_cases(example, args):
 def find_answer_in_context(answers: List[str], ctxs: List[str], tokenizer):
     for ans in answers:
         for ctx in ctxs:
-            if has_answer([ans], ctx, tokenizer):
+            if has_answer([ans], ctx["text"], tokenizer):
                 return ans
     return answers[0]
 
-def preprocess_dataset(dataset, args):
+def preprocess_dataset(dataset, args, mode="train"):
     dataset = dataset.map(lambda x: {"question": normalize_question(x["question"])}, num_proc=NUM_PROC, desc="Normalizing question...")
     dataset = dataset.map(lambda x: {"ctxs": x["ctxs"][:args.num_contexts]}, num_proc=NUM_PROC, desc="Selecting contexts...")
     dataset = dataset.map(lambda x: {"hasanswer": determine_answerable(x)}, num_proc=NUM_PROC, desc="Determining answerable...")
-    if args.only_has_answer:
+    if mode=="train" and args.only_has_answer:
         dataset = dataset.filter(lambda x: x["hasanswer"], num_proc=NUM_PROC)
         print("After ONLY-HAS-ANSWER filtering: ", len(dataset))
-    if args.answer_in_context:
+    if mode=="train" and args.answer_in_context:
         tokenizer = SimpleTokenizer()
         dataset = dataset.map(lambda x: {"answers": [find_answer_in_context(x["answers"], x["ctxs"], tokenizer)]}, num_proc=NUM_PROC, desc="Finding answer in context...")
     if args.cbr:
