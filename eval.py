@@ -72,7 +72,7 @@ def main(args):
         dataset = dataset.shuffle(seed=42)
         dataset = dataset.select(range(10))
         run_name += "-test"
-    dataset = preprocess_dataset(dataset, args)
+    dataset = preprocess_dataset(dataset, args, "test")
     result, ems, accs, f1_scores = [], [], [], []
 
     iterator = tqdm(dataset, desc="Generating...")
@@ -128,6 +128,7 @@ if __name__ == "__main__":
     parser.add_argument("--custom_loss", type=str2bool, default=False)
     parser.add_argument("--max_new_tokens", type=int, default=10)
     parser.add_argument("--test", type=str2bool, default=False)
+    parser.add_argument("--only_has_answer", type=str2bool, default=False)
     args = parser.parse_args()
     main(args)
 
