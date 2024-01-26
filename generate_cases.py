@@ -1,4 +1,9 @@
-from dataset import split_sentence, preprocess_text
+from dataset import (
+    split_sentence,
+    preprocess_text,
+    make_spacy_docs,
+    annotate_answer_type
+)
 from datasets import load_dataset
 import pandas as pd
 import numpy as np
@@ -75,8 +80,11 @@ def generate_unans(args, dataset):
     if not args.test:
         dataset.push_to_hub("Atipico1/mrqa_unanswerable_v2")
 
-def generate_adversary(args):
-    pass
+def generate_adversary(args, dataset):
+    nlp = spacy.load(args.spacy_model)
+    output = make_spacy_docs(dataset, nlp, args)
+    dataset= annotate_answer_type(dataset, output, args)
+    
     
 def generate_conflict(args):
     pass
@@ -109,14 +117,11 @@ if __name__=="__main__":
     
     # Unans parser
     unans_parser = subparsers.add_parser('unans', help='Generate unanswerable cases')
-    unans_parser.add_argument('--method', type=str, choices=['Q', 'QC', 'R'],
-                              help='Parameter 2 for task 2')
-    unans_parser.add_argument('--add_squad2', type=str2bool, default=False)
     unans_parser.add_argument('--alpha', type=float, default=0.5)
     unans_parser.add_argument('--topk', type=int, default=10, help='Top k nearest neighbors for faiss search')
     # Adversary parser
     adv_parser = subparsers.add_parser('adversary', help='Run task 3')
-    adv_parser.add_argument('param3', help='Parameter 3 for task 3')
+    adv_parser.add_argument('--save_dir', help='path to save the docs', type=str, default='/data/seongilpark/adversary')
     
     args = parser.parse_args()
     if args.use_gpu:
