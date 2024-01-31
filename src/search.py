@@ -1,14 +1,16 @@
 import torch
+import spacy
 import random
 import joblib, os
 from datasets import Dataset, DatasetDict
 from tqdm.auto import tqdm
 from src.index import build_index_with_ids
-from src.utils import normalize_answer, text_has_answer_wo_normalization
+from src.utils import normalize_answer, text_has_answer_wo_normalization, cosine_similarity
 import numpy as np
 import regex
 import unicodedata
 import faiss
+from typing import Dict, List
 from transformers import AutoTokenizer, DPRQuestionEncoder, DPRContextEncoder
 
 def dpr_embed(dataset: Dataset, col: str, args) -> list[np.ndarray]:     
@@ -147,7 +149,56 @@ def find_random_contexts(dataset: Dataset):
     assert len(new_context) == len(dataset), "Length doesn't match"
     dataset = dataset.add_column("random_context", new_context)
     dataset = dataset.filter(lambda x: x["random_context"] is not None, num_proc=8)
-    return dataset             
+    return dataset
+
+def check_alias(entity: str, answers: List[str]):
+    for answer in answers:
+        if normalize_answer(entity) in normalize_answer(answer) or normalize_answer(answer) in normalize_answer(entity):
+            return True
+    return False
+
+def find_similar_entity(dataset: Dataset, args, entities_groupby_type: Dict[str, List], indexs: Dict):
+    output = []
+    scores = []
+    for row in tqdm(dataset, desc="Generating similar entity", total=len(dataset)):
+        entity_type = row["entity"]
+        index = indexs[entity_type]
+        entity_set = entities_groupby_type[entity_type]
+        query = np.array([row["entity_vector"]]).astype("float32")
+        distances, indices = index.search(query, 100)
+        hit = False
+        for score, idx in zip(distances[0], indices[0]):
+            if score < args.threshold:
+                if check_alias(entity_set[idx], row[args.ans_col]):
+                    continue
+                hit = True
+                output.append(entity_set[idx])
+                scores.append(score)
+                break
+        if not hit:
+            if check_alias(entity_set[indices[0][-1]], row[args.ans_col]):
+                output.append(None)
+                scores.append(None)
+            else:
+                output.append(entity_set[indices[0][-1]])
+                scores.append(distances[0][-1])
+    return output, scores       
+
+def find_random_entity(dataset: Dataset, entities_groupby_type: Dict[str, List], args):
+    output = []
+    for row in tqdm(dataset, desc="Generating random entity", total=len(dataset)):
+        max_cnt = 0
+        entity_type = row["entity"]
+        entity_set = entities_groupby_type[entity_type]
+        random_entity = random.choice(entity_set)
+        while check_alias(random_entity, row[args.ans_col]) and max_cnt < 50:
+            max_cnt += 1
+            random_entity = random.choice(entity_set)
+        if max_cnt >= 50:
+            output.append(None)
+        else:
+            output.append(random_entity)
+    return output
 
 ## From Contriever repo : https://github.com/facebookresearch/contriever/blob/main/src/evaluation.py#L23
 

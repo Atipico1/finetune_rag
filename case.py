@@ -77,6 +77,7 @@ def _filter_same_question(case_set: Dataset, qa_set: Dataset):
     qa_unique_questions = []
     for subset in qa_set.keys():
         qa_unique_questions.extend(list(set([normalize_answer(q) for q in qa_set[subset]["question"]])))
+    case_set = case_set.filter(lambda x: len(x["answer_in_context"][0].split()) < 10, num_proc=8) 
     return case_set.filter(lambda x: normalize_answer(x["question"]) not in qa_unique_questions, num_proc=8)
 
 def main(args):

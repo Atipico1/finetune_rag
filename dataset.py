@@ -82,7 +82,7 @@ def split_sentence(dataset: Dataset, nlp, args):
     print("After split: ", len(dataset))
     return dataset
 
-def make_spacy_docs(dataset: Dataset, nlp, args):
+def make_spacys(dataset: Dataset, nlp, args):
     total_texts = list(set(dataset["context"] + [normalize_question(q) for q in dataset["question"]]))
     docs = []
     for i in tqdm(range(0, len(total_texts), args.batch_size), desc="Making spacy docs..."):
@@ -133,7 +133,7 @@ def annotate_answer_type(dataset, map_dict: dict, args):
 
 def filter_and_sort(data):
     sorted_data = sorted(data, key=lambda x: float(x["distance"]), reverse=True)
-    filtered_data = [d for d in sorted_data if ("<Tr>" not in d["context"]) and (len(d["answer"].split()) < 15)]
+    filtered_data = [d for d in sorted_data if "<Tr>" not in d["context"]]
     if filtered_data == []:
         print([len(d["answer"].split()) for d in sorted_data])
     return filtered_data

@@ -1,8 +1,13 @@
 import argparse
+import time
 from collections import Counter
 import re
 import string
-from typing import Callable
+from typing import Callable, List
+import numpy as np
+import spacy
+from tqdm.auto import tqdm
+from openai import OpenAI
 
 def normalize_answer(s: str):
     if not s:
@@ -86,3 +91,59 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
+
+def cosine_similarity(a, b):
+    if not isinstance(b, np.ndarray):
+        b = b.get()
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+def cal_cosine_similarities(queries_vector: List[np.ndarray], entities: List[str], args):
+    scores = []
+    nlp = spacy.load(args.spacy_model)
+    assert len(queries_vector) == len(entities), "Length of queries and entities should be same"
+    for i in tqdm(range(0, len(queries_vector), args.batch_size), desc="Generating random entity score"):
+        docs = nlp.pipe(entities[i:i+args.batch_size], disable=["ner"])
+        for doc, query in zip(docs, queries_vector[i:i+args.batch_size]):
+            scores.append(cosine_similarity(query, doc.vector))
+    return scores
+
+def find_answer_in_context(answer_text: str, context: str):
+    if isinstance(context, str):
+        context_spans = [
+            (m.start(), m.end())
+            for m in re.finditer(re.escape(answer_text.lower()), context.lower())
+        ]
+        return context_spans
+    else:
+        return [""]
+
+def update_context_with_substitution_string(
+    context: str, originals:List[str], substitution: str, replace_every_string=True
+) -> str:
+    replace_spans = []
+    for orig_answer in originals:
+        replace_spans.extend(find_answer_in_context(orig_answer, context))
+    replace_strs = set([context[span[0] : span[1]] for span in replace_spans])
+    for replace_str in replace_strs:
+        context = context.replace(replace_str, substitution)
+    return context
+
+def generate_answer_from_gpt(prompt: List[str], client: OpenAI, config: dict):
+    max_try = 0
+    while max_try < 3:
+        try:
+            response = client.completions.create(
+            model="gpt-3.5-turbo-instruct",
+            prompt=prompt,
+            max_tokens=config["max_tokens"],
+            seed=42,
+            temperature=config["temperature"],
+            top_p=config["top_p"]
+            )
+            return [res.text for res in response.choices]
+        except Exception as e:
+            print(f"GPT API Error : {e}")
+            max_try += 1
+            time.sleep(3)
+    print("GPT Failed to generate answer")
+    return ""

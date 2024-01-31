@@ -13,18 +13,21 @@ def build_multiple_indexes(input_dict: Dict, subsets: List[str]):
             output.update({subset:{"index":index, "id2q":{_id:row for _id, row in zip(np.arange(len(embeddings)).astype('int64'), rows)}}})
     return output
 
-def build_index_with_ids(vectors: np.ndarray, save_dir: str, name: str, is_save: bool = True):
-    res = faiss.StandardGpuResources()
+def build_index_with_ids(vectors: np.ndarray, save_dir: str, name: str, is_save: bool = True, gpu_id: int =0):
     index_flat = faiss.IndexFlatIP(len(vectors[0]))
     index = faiss.IndexIDMap(index_flat)
-    gpu_index = faiss.index_cpu_to_gpu(res, 0, index)
     ids = np.arange(len(vectors)).astype('int64')
-    gpu_index.add_with_ids(vectors, ids)
-    if is_save:
-        faiss.gpu_to_cpu(index)
-        faiss.write_index(index, f"{save_dir}/{name}.index")
-        print(f"{name} Index saved")
-    return gpu_index
+    if gpu_id != -100:
+        if faiss.get_num_gpus() > 1:
+            gpu_index = faiss.index_cpu_to_all_gpus(index)
+        else:
+            res = faiss.StandardGpuResources()
+            gpu_index = faiss.index_cpu_to_gpu(res, gpu_id, index)
+            gpu_index.add_with_ids(vectors, ids)
+        return gpu_index
+    else:
+        index.add_with_ids(vectors, ids)
+        return index
 
 def load_index(index_path):
     return faiss.read_index(index_path)
