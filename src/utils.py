@@ -5,9 +5,7 @@ import re
 import string
 from typing import Callable, List
 import numpy as np
-import spacy
 from tqdm.auto import tqdm
-from openai import OpenAI
 
 def normalize_answer(s: str):
     if not s:
@@ -98,6 +96,7 @@ def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 def cal_cosine_similarities(queries_vector: List[np.ndarray], entities: List[str], args):
+    import spacy
     scores = []
     nlp = spacy.load(args.spacy_model)
     assert len(queries_vector) == len(entities), "Length of queries and entities should be same"
@@ -128,7 +127,7 @@ def update_context_with_substitution_string(
         context = context.replace(replace_str, substitution)
     return context
 
-def generate_answer_from_gpt(prompt: List[str], client: OpenAI, config: dict):
+def generate_answer_from_gpt(prompt: List[str], client , config: dict):
     max_try = 0
     while max_try < 3:
         try:

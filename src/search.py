@@ -1,5 +1,3 @@
-import torch
-import spacy
 import random
 import joblib, os
 from datasets import Dataset, DatasetDict
@@ -13,7 +11,8 @@ import faiss
 from typing import Dict, List
 from transformers import AutoTokenizer, DPRQuestionEncoder, DPRContextEncoder
 
-def dpr_embed(dataset: Dataset, col: str, args) -> list[np.ndarray]:     
+def dpr_embed(dataset: Dataset, col: str, args) -> list[np.ndarray]: 
+    import torch    
     inputs = list(set(dataset[col]))
     if not args.test:
         if os.path.exists(f"/data/seongilpark/{col}_embeddings.pkl"):

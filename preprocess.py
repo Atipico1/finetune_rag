@@ -55,7 +55,7 @@ def remove_duplicate(data: Dataset, tokenizer, model, args):
             unique_queries.add(query)
             result_idxs.append(idx)
     print(f"Remove duplicates by string match -> Before : {len(data)} | After : {len(result_idxs)}")
-    filtered_data = data.select(result_idxs, writer_batch_size=10000)
+    filtered_data = data.select(result_idxs, writer_batch_size=50000)
     
     questions = filtered_data["question"]
     result = []
@@ -66,10 +66,10 @@ def remove_duplicate(data: Dataset, tokenizer, model, args):
             embeddings = model(**output).pooler_output.detach().cpu().numpy() # [args.batch_size, hidden_dim]
         result.extend([emb for emb in embeddings])
     matrix = np.array([v/np.linalg.norm(v) for v in result])
-    key_matrix = np.empty((0, result.shape[1]))
+    key_matrix = np.empty((0, matrix.shape[1]))
     valid_indices = []
     # 100개의 행렬을 순회
-    for i in range(matrix):
+    for i in tqdm(range(len(matrix)), desc="Removing duplicates by similarity..."):
         current_matrix = matrix[i:i+1]  # 현재 행렬 (1x768)
 
         # 첫 번째 iteration 예외 처리
@@ -86,7 +86,7 @@ def remove_duplicate(data: Dataset, tokenizer, model, args):
                 key_matrix = np.vstack([key_matrix, current_matrix])
                 valid_indices.append(i)
     print(f"Remove duplicates by similarity-> Before : {len(filtered_data)} | After : {len(valid_indices)}")
-    filtered_data = filtered_data.select(valid_indices)
+    filtered_data = filtered_data.select(valid_indices, writer_batch_size=50000)
     return filtered_data
 
 def _preprocess(dataset: Dataset, args):

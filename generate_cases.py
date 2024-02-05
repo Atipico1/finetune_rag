@@ -1,4 +1,5 @@
 import faiss
+import os
 from dataset import (
     split_sentence_and_make_short_context,
     preprocess_text,
@@ -37,10 +38,11 @@ def load_mrqa(args):
     mrqa = load_dataset("mrqa")
     train, test, valid = mrqa["train"], mrqa["test"], mrqa["validation"]
     mrqa = concatenate_datasets([train, test, valid])
-    if args.test:
-        mrqa = mrqa.shuffle(seed=42).select(range(5000))
-    mrqa: Dataset = mrqa.filter(lambda x: x["subset"] not in args.except_subset, num_proc=8)
+    mrqa: Dataset = mrqa.filter(lambda x: x["subset"] not in args.except_subset, num_proc=os.cpu_count())
     print(f"MRQA Loaded without {args.except_subset} ! -> Size : {len(mrqa)}")
+    if args.test:
+        mrqa = mrqa.shuffle(seed=42).select(range(10000))
+        print(f"MRQA-TEST Loaded ! -> Size : {len(mrqa)}")
     return mrqa
 
 def preprocess(args, mrqa):
@@ -62,7 +64,7 @@ def preprocess(args, mrqa):
     else:
         mrqa = mrqa.remove_columns(["context","context_tokens","question_tokens","detected_answers"])
         mrqa = mrqa.rename_column("short_context", "context")
-        mrqa.push_to_hub("Atipico1/mrqa_preprocessed")
+        mrqa.push_to_hub("Atipico1/mrqa_preprocessed_v2")
 
 def generate_unans(args, dataset):
     from src.search import (
@@ -244,9 +246,11 @@ if __name__=="__main__":
 
     # Preprocess parser
     preprocess_parser = subparsers.add_parser('preprocess', help='Run preprocess')
-    preprocess_parser.add_argument('--ctx_len', type=int, default=150)
+    preprocess_parser.add_argument('--ctx_min_len', type=int, default=50)
+    preprocess_parser.add_argument('--ctx_avg_len', type=int, default=70)
+    preprocess_parser.add_argument("--ctx_max_len", type=int, default=120)
     preprocess_parser.add_argument(
-        '--except_subset', nargs='+', type=str, default='',
+        '--except_subset', nargs='+', type=str, default='SearchQA',
         help='Possible Subsets: SearchQA | SQuAD | NaturalQuestionsShort | HotpotQA | NewsQA'
         )
     preprocess_parser.add_argument('--answer_max_len', type=int, default=10)

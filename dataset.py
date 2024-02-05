@@ -37,8 +37,6 @@ def preprocess_text(dataset: Dataset, args) -> Dataset:
     print("Before context preprocess: ", len(dataset))
     dataset = dataset.filter(lambda x: x["context"] is not None, num_proc=NUM_PROC)
     print("After context preprocess: ", len(dataset))
-    dataset = dataset.filter(lambda x: all([len(ans.split())< args.answer_max_len for ans in x["answers"]]), num_proc=NUM_PROC, desc="Normalizing question...")
-    print("After answer length filtering: ", len(dataset))
     return dataset
 
 def split_sentence_and_make_short_context(dataset: Dataset, nlp, args):
@@ -57,6 +55,19 @@ def split_sentence_and_make_short_context(dataset: Dataset, nlp, args):
                 if has_answer(answer, sent, simple_tokenizer):
                     start_idx, end_idx = max(0, idx-3), min(len(sents), idx+4)
                     answer_passage = " ".join([sent.strip() for sent in sents[start_idx:end_idx]])
+                    while len(answer_passage.split()) < args.ctx_avg_len:
+                        if start_idx == 0 and end_idx == len(sents):
+                            break
+                        elif start_idx == 0 and end_idx < len(sents):
+                            end_idx += 1
+                            answer_passage = " ".join([sent.strip() for sent in sents[start_idx:end_idx]])
+                        elif start_idx > 0 and end_idx == len(sents):
+                            start_idx -= 1
+                            answer_passage = " ".join([sent.strip() for sent in sents[start_idx:end_idx]])
+                        else:
+                            start_idx -= 1
+                            end_idx += 1
+                            answer_passage = " ".join([sent.strip() for sent in sents[start_idx:end_idx]])
                     answer_sents.append(sent)
                     buffer = []
                     for ans in answer:
@@ -81,8 +92,12 @@ def split_sentence_and_make_short_context(dataset: Dataset, nlp, args):
     dataset = dataset.add_column("short_context", answer_passages)
     dataset = dataset.add_column("answer_sent", answer_sents)
     dataset = dataset.add_column("answer_in_context", answers_in_context)
-    dataset = dataset.filter(lambda x: x["short_context"] is not None and len(x["short_context"].split())< args.ctx_len, num_proc=NUM_PROC)
+    dataset = dataset.filter(lambda x: x["short_context"] is not None, num_proc=NUM_PROC)
     print("After split: ", len(dataset))
+    dataset = dataset.filter(lambda x: len(x["short_context"].split())< args.ctx_max_len and len(x["short_context"].split()) > args.ctx_min_len, num_proc=NUM_PROC)
+    print("After context length filtering: ", len(dataset))
+    dataset = dataset.filter(lambda x: all([len(ans.split())< args.answer_max_len for ans in x["answer_in_context"]]), num_proc=NUM_PROC, desc="Max answer len filtering...")
+    print("After answer length filtering: ", len(dataset))
     return dataset
 
 def make_spacys(dataset: Dataset, nlp, args):
