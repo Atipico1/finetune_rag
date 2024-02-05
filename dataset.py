@@ -3,23 +3,24 @@ from datasets import Dataset
 from tqdm.auto import tqdm
 from collections import defaultdict
 from src.search import SimpleTokenizer, has_answer
-from src.utils import normalize_question
+from src.utils import normalize_question, update_context_with_substitution_string
 import joblib
 import torch
 from typing import List
 from transformers import DataCollatorForLanguageModeling
 import os
+import string
 
 #ANSWER_POS = ["ADV", "ADJ", "NOUN", "NUM", "SYM", "PROPN"]
 EDIT_CANDIDATE_POS = ["VERB", "NOUN", "ADJ", "ADV"]
 ANSWER_POS = ["ADV", "ADJ", "NOUN", "VERB", "NUM"]
 NUM_PROC = os.cpu_count()
-def _preprocess(text, subset_name: str):
+def _preprocess_context(text, subset_name: str):
     if subset_name == "NewsQA":
         start = text.find("--")
         end = start + 2
         text = text[end:]
-    if ("<Table>" in text) or ("<Ol>" in text) or ("<Li>" in text):
+    if ("<Table>" in text) or ("<Ol>" in text) or ("<Li>" in text) or ("<Tr>" in text):
         return None
     text = text.replace("<P>", "")
     text = text.replace("</P>", "")
@@ -31,14 +32,16 @@ def _preprocess(text, subset_name: str):
     text = re.sub(' +', ' ', text)
     return text
 
-def preprocess_text(dataset: Dataset) -> Dataset:
-    dataset = dataset.map(lambda x: {"context": _preprocess(x["context"], x["subset"])}, num_proc=NUM_PROC, desc="Preprocessing...")
-    print("Before preprocess: ", len(dataset))
+def preprocess_text(dataset: Dataset, args) -> Dataset:
+    dataset = dataset.map(lambda x: {"context": _preprocess_context(x["context"], x["subset"])}, num_proc=NUM_PROC, desc="Preprocessing...")
+    print("Before context preprocess: ", len(dataset))
     dataset = dataset.filter(lambda x: x["context"] is not None, num_proc=NUM_PROC)
-    print("After preprocess: ", len(dataset))
+    print("After context preprocess: ", len(dataset))
+    dataset = dataset.filter(lambda x: all([len(ans.split())< args.answer_max_len for ans in x["answers"]]), num_proc=NUM_PROC, desc="Normalizing question...")
+    print("After answer length filtering: ", len(dataset))
     return dataset
 
-def split_sentence(dataset: Dataset, nlp, args):
+def split_sentence_and_make_short_context(dataset: Dataset, nlp, args):
     simple_tokenizer = SimpleTokenizer()
     answer_passages = []
     answer_sents = []
@@ -162,6 +165,44 @@ def find_answer_in_context(answers: List[str], ctxs: List[str], tokenizer):
                 return ans
     return answers[0]
 
+def add_conflict_context(example, args):
+    if args.both:
+        pass
+    elif args.conflict_only:
+        if not example["valid_conflict"]:
+            return example["ctxs"]
+        hasanswer_cnt = sum([int(ctx["hasanswer"]) for ctx in example["ctxs"]])
+        if hasanswer_cnt > 1 and hasanswer_cnt < args.num_contexts:
+            for i in range(len(example["ctxs"])):
+                if not bool(example["ctxs"][i]["hasanswer"]):
+                    example["ctxs"][i]["text"] = example["conflict_context"]
+                    return example["ctxs"]
+            print("No context without answer!")
+        else:
+            return example["ctxs"]
+
+def is_conflict(example, args):
+    if args.both:
+        pass
+    elif args.conflict_only:
+        if not example["valid_conflict"]:
+            return False
+        hasanswer_cnt = sum([int(ctx["hasanswer"]) for ctx in example["ctxs"]])
+        if hasanswer_cnt > 1 and hasanswer_cnt < args.num_contexts:
+            return True
+        else:
+            return False
+
+def anonymize(example, mode):
+    for c in example["case"]:
+        num_chars = random.randint(4, 6) if mode == "train" else random.randint(6, 8)
+        random_chars = "".join([random.choice(string.ascii_letters) for _ in range(num_chars)])
+        if "original_answers" not in c:
+            c["original_answers"] = [c["answer"]]
+        c["context"] = update_context_with_substitution_string(c["context"], c["original_answers"], random_chars)
+        c["answer"] = random_chars
+    return example["case"]
+
 def preprocess_dataset(dataset, args, mode="train"):
     dataset = dataset.map(lambda x: {"question": normalize_question(x["question"])}, num_proc=NUM_PROC, desc="Normalizing question...")
     dataset = dataset.map(lambda x: {"ctxs": x["ctxs"][:args.num_contexts]}, num_proc=NUM_PROC, desc="Selecting contexts...")
@@ -174,9 +215,17 @@ def preprocess_dataset(dataset, args, mode="train"):
         dataset = dataset.map(lambda x: {"answers": [find_answer_in_context(x["answers"], x["ctxs"], tokenizer)]}, num_proc=NUM_PROC, desc="Finding answer in context...")
     if args.cbr:
         dataset = dataset.map(lambda x: {"case": aggregate_cases(x, args)}, num_proc=NUM_PROC, desc="Aggregating cases...")
+        if args.anonymize:
+            dataset = dataset.map(lambda x: {"case": anonymize(x, mode)}, num_proc=NUM_PROC, desc="Anonymizing...")
     if args.unanswerable:
         dataset = dataset.map(lambda x: {"original_answers": x["answers"]}, num_proc=NUM_PROC, desc="Saving original answers...")
         dataset = dataset.map(lambda x: {"answers": ["unanswerable"] if not x["hasanswer"] else x["answers"]}, num_proc=NUM_PROC, desc="Replacing answers...")
+    if args.conflict:
+        dataset = dataset.map(lambda x: {"ctxs": add_conflict_context(x, args)}, num_proc=NUM_PROC, desc="Add conflicting contexts...")
+        dataset = dataset.map(lambda x: {"is_conflict": is_conflict(x, args)}, num_proc=NUM_PROC, desc="Determining conflict...")
+        dataset = dataset.map(lambda x: {"original_answers": x["answers"]}, num_proc=NUM_PROC, desc="Saving original answers...")
+        dataset = dataset.map(lambda x: {"answers": ["conflict"] if x["is_conflict"] else x["answers"]}, num_proc=NUM_PROC, desc="Replacing answers...")
+        print("Number of is_conflict: ", sum(dataset["is_conflict"]))
     return dataset
 
 def determine_answerable(example):
