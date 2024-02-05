@@ -1,36 +1,25 @@
+import faiss
 from dataset import (
-    split_sentence,
+    split_sentence_and_make_short_context,
     preprocess_text,
     annotate_answer_type
 )
+
 from datasets import load_dataset
 import joblib
 import pandas as pd
 import numpy as np
 from tqdm.auto import tqdm
-from datasets import Dataset, DatasetDict, concatenate_datasets
+from datasets import Dataset, concatenate_datasets
 import spacy, torch
 import argparse
 import wandb
 from src.utils import (
     str2bool,
-    normalize_answer,
     cal_cosine_similarities,
-    update_context_with_substitution_string,
     normalize_question
 )
-from src.search import (
-    find_similar_questions,
-    find_similar_contexts,
-    find_similar_contexts_with_questions,
-    find_random_contexts,
-    find_similar_entity,
-    find_random_entity,
-    has_answer,
-    SimpleTokenizer
-)
 from typing import List
-from src.index import build_index_with_ids, search_index
 from preprocess import query_masking, remove_duplicate, query_embedding
 from transformers import AutoTokenizer, DPRQuestionEncoder
 
@@ -61,9 +50,9 @@ def preprocess(args, mrqa):
     mrqa = query_masking(nlp, mrqa)
     del nlp
     nlp = spacy.load(args.spliter_model)
-    mrqa = remove_duplicate(mrqa)
-    mrqa = preprocess_text(mrqa)
-    mrqa = split_sentence(mrqa, nlp, args)
+    mrqa = remove_duplicate(mrqa, tokenizer, model, args)
+    mrqa = preprocess_text(mrqa, args)
+    mrqa = split_sentence_and_make_short_context(mrqa, nlp, args)
     mrqa = query_embedding(model, tokenizer, mrqa, args)
     if args.test:
         sample = mrqa.shuffle().select(range(10))
@@ -76,6 +65,12 @@ def preprocess(args, mrqa):
         mrqa.push_to_hub("Atipico1/mrqa_preprocessed")
 
 def generate_unans(args, dataset):
+    from src.search import (
+        find_similar_questions,
+        find_similar_contexts,
+        find_similar_contexts_with_questions,
+        find_random_contexts
+    )
     dataset, q_embs = find_similar_questions(dataset, args)
     dataset, c2embs = find_similar_contexts(dataset, args)
     dataset = find_similar_contexts_with_questions(q_embs, c2embs, dataset, args)
@@ -90,6 +85,10 @@ def generate_unans(args, dataset):
 
 def generate_similar_context(args, dataset):
     from vllm import LLM, SamplingParams
+    from src.search import (
+    has_answer,
+    SimpleTokenizer
+)
     raw_text = """Rewrite the following ariticle, maintaining its original meaning. Do not add any new information. Keep the specified words unchanged.
 Words to Keep Unchanged: {ANSWERS}
 Original Article: {CONTEXT}
@@ -138,6 +137,8 @@ def generate_adversary(args, dataset):
 
 def generate_similar_entity(args):
     from datasets import load_from_disk
+    from src.index import build_index_with_ids
+    from src.search import find_similar_entity, find_random_entity
     dataset = load_from_disk(args.local_path)
     dataset = dataset.filter(lambda x: not np.isnan(x["entity_vector"]).any(), batch_size=4000, num_proc=8)
     dataset = dataset.filter(lambda x: x["entity"] is not None, num_proc=8)
@@ -173,6 +174,10 @@ def generate_similar_entity(args):
 
 def generate_conflict_context(args, dataset):
     from vllm import LLM, SamplingParams
+    from src.search import (
+    has_answer,
+    SimpleTokenizer
+)
     sentence_format = """Please write a single sentence claim using the follwoing question and answer. The claim should include the answer and be as realistic as possible:
 Question: {QUESTION}
 Answer: {ANSWER}
@@ -244,7 +249,8 @@ if __name__=="__main__":
         '--except_subset', nargs='+', type=str, default='',
         help='Possible Subsets: SearchQA | SQuAD | NaturalQuestionsShort | HotpotQA | NewsQA'
         )
-    
+    preprocess_parser.add_argument('--answer_max_len', type=int, default=10)
+    preprocess_parser.add_argument('--remove_duplicate_thres', type=float, default=0.95)
     # Unans parser
     unans_parser = subparsers.add_parser('unans', help='Generate unanswerable cases')
     unans_parser.add_argument('--alpha', type=float, default=0.5)
