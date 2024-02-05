@@ -17,7 +17,7 @@ def build_index_with_ids(vectors: np.ndarray, save_dir: str, name: str, is_save:
     index_flat = faiss.IndexFlatIP(len(vectors[0]))
     index = faiss.IndexIDMap(index_flat)
     ids = np.arange(len(vectors)).astype('int64')
-    if gpu_id != -100:
+    if gpu_id != -100 and faiss.get_num_gpus() != 0:
         if faiss.get_num_gpus() > 1:
             gpu_index = faiss.index_cpu_to_all_gpus(index)
         else:
