@@ -8,6 +8,12 @@ def generate_unans_dataset(args):
     test = dataset["test"].map(lambda x: {"answers": x["answers"] if any([ctx["hasanswer"] for ctx in x["ctxs"]]) else ["unanswerable"]}, num_proc=8)
     DatasetDict({"train":train, "test":test}).push_to_hub(f"Atipico1/{args.dataset.split('/')[-1]}_unans")
 
+def generate_conflict_dataset(args):
+    dataset = load_dataset(args.dataset)
+    train = dataset["train"].map(lambda x: {"answers": x["answers"] if len(x["answers"]) > 1 else ["conflict"]}, num_proc=8)
+    test = dataset["test"].map(lambda x: {"answers": x["answers"] if len(x["answers"]) > 1 else ["conflict"]}, num_proc=8)
+    DatasetDict({"train":train, "test":test}).push_to_hub(f"Atipico1/{args.dataset.split('/')[-1]}_conflict")
+
 if __name__=="__main__":
     # Main parser
     parser = argparse.ArgumentParser()
@@ -27,8 +33,6 @@ if __name__=="__main__":
     args = parser.parse_args()
     if args.task == "unans":
         generate_unans_dataset(args)
-    elif args.task == "adversary":
-        generate_adversarial_dataset(args)
     elif args.task == "conflict":
         generate_conflict_dataset(args)
     elif args.task == "adversarial-unans":

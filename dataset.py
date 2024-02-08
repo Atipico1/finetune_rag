@@ -1,15 +1,19 @@
-import re, random
-from datasets import Dataset
+import re, random, spacy, os, string, joblib, wandb
+from datasets import Dataset, load_dataset
 from tqdm.auto import tqdm
 from collections import defaultdict
 from src.search import SimpleTokenizer, has_answer
-from src.utils import normalize_question, update_context_with_substitution_string
-import joblib
+from src.utils import (
+    normalize_question,
+    update_context_with_substitution_string,
+    normalize_answer
+)
 import torch
 from typing import List
 from transformers import DataCollatorForLanguageModeling
-import os
-import string
+import numpy as np
+import pandas as pd
+import datetime as dt
 
 #ANSWER_POS = ["ADV", "ADJ", "NOUN", "NUM", "SYM", "PROPN"]
 EDIT_CANDIDATE_POS = ["VERB", "NOUN", "ADJ", "ADV"]
@@ -344,3 +348,128 @@ class CustomDataCollator(DataCollatorForLanguageModeling):
 3. pos에 있는 text들 중에서
 4. 가장 유사한 걸 찾기
 """
+
+def ner(dataset: Dataset, args, col_name: str):
+    res = []
+    nlp = spacy.load(args.spacy_model)
+    entities = defaultdict(list)
+    inputs = dataset[col_name]
+    answers = dataset[args.ans_col]
+    for i in tqdm(range(0, len(inputs), args.batch_size), desc="Extracting entities..."):
+        batch = inputs[i:i+args.batch_size]
+        batch_answers = answers[i:i+args.batch_size]
+        docs = list(nlp.pipe(batch, batch_size=args.batch_size))
+        for doc, ans in zip(docs, batch_answers):
+            hit = False
+            if doc.ents:
+                for ent in doc.ents:
+                    entities[ent.label_].append(ent.text)
+                    if not hit and normalize_answer(ent.text) == normalize_answer(ans[0]):
+                        res.append(ent.label_)
+                        hit = True
+            if not hit:
+                res.append(None)
+    dataset = dataset.add_column("entity", res)
+    return dataset.filter(lambda x: x["entity"] is not None, num_proc=NUM_PROC)
+
+def gen_entity_vector(dataset: Dataset, args, col_name: str):
+    nlp = spacy.load("en_core_web_lg")
+    entities = dataset[col_name]
+    if isinstance(entities[0], list):
+        entities = [ent[0] for ent in entities]
+    vectors = []
+    for i in range(0, len(entities), args.batch_size):
+        batch = entities[i:i+args.batch_size]
+        docs = list(nlp.pipe(batch, batch_size=args.batch_size))
+        if args.use_gpu and torch.cuda.is_available():
+            vectors.extend([doc.vector.get() for doc in docs])
+        else:
+            vectors.extend([doc.vector for doc in docs])
+    vectors = [v/np.linalg.norm(v) for v in vectors]
+    dataset = dataset.add_column("entity_vector", vectors)
+    return dataset.filter(lambda x: not np.isnan(x["entity_vector"]).any(), batch_size=4000, num_proc=NUM_PROC)
+
+def is_valid_entity(entity: str, label: str) -> bool:
+    if "@" in entity:
+        return False
+    if label == "DATE" and "through" in entity:
+        return False
+    if label == "DATE" and "and" in entity:
+        return False
+    return True
+
+def generate_entity_pool(dataset: Dataset, args):
+    contexts = []
+    if args.use_wikitext:
+        dataset = load_dataset("wikitext","wikitext-103-raw-v1",split="train")
+        dataset = dataset.filter(lambda x: len(x["text"]) > 50, num_proc=NUM_PROC)
+        dataset = dataset.map(lambda x: {"text": x["text"].strip()}, num_proc=NUM_PROC)
+        contexts += dataset["text"]
+    else:
+        contexts += dataset["context"]
+    if args.test:
+        contexts = random.sample(contexts, 10000)
+    print("Total number of contexts: ", len(contexts))
+    nlp = spacy.load("en_core_web_trf")
+    entities = defaultdict(list)
+    for i in tqdm(range(0, len(contexts), 2000), desc="Extracting entities from entity pool..."):
+        batch = contexts[i:i+2000]
+        docs = list(nlp.pipe(batch, batch_size=2000))
+        for doc in docs:
+            if doc.ents:
+                for ent in doc.ents:
+                    if is_valid_entity(ent.text.lower(), ent.label_):
+                        entities[ent.label_].append(ent.text)
+    entities = {k: list(set(v)) for k, v in entities.items()}
+    nlp = spacy.load("en_core_web_lg")
+    
+    entities_to_vector = defaultdict(list)
+    valid_entity_group = defaultdict(list)
+    for k, v in entities.items():
+        vectors, valid_entities, valid_vectors = [], [], []
+        for i in range(0, len(v), 2000):
+            batch = v[i:i+2000]
+            docs = list(nlp.pipe(batch, batch_size=2000))
+            if args.use_gpu and torch.cuda.is_available():
+                vectors.extend([doc.vector.get() for doc in docs])
+            else:
+                vectors.extend([doc.vector for doc in docs])
+        vectors = [v/np.linalg.norm(v) for v in vectors]
+        for vec, ent in zip(vectors, v):
+            if not np.isnan(vec).any():
+                valid_entities.append(ent)
+                valid_vectors.append(vec)
+        entities_to_vector[k] = np.array(valid_vectors)
+        valid_entity_group[k] = valid_entities
+    for k, v in valid_entity_group.items():
+        print(f"{k}: {len(v)}")
+    if not args.test:
+        joblib.dump(entities_to_vector, f"/data/seongilpark/dataset/entity_group_vec.pkl")
+        joblib.dump(valid_entity_group, f"/data/seongilpark/dataset/entity_group.pkl")
+        print("Entity pool saved!")
+        print("Saved path: /data/seongilpark/dataset/entity_group.pkl")
+    return valid_entity_group, entities_to_vector
+        
+def save_samples_to_wandb(dataset: Dataset, args):
+    now = dt.datetime.now().strftime("%m-%d-%H-%M")
+    if args.task == "unans":
+        df = pd.DataFrame(dataset)
+        df["answer_in_context"] = df["answer_in_context"].apply(lambda x: ", ".join(x))
+        df = df[["question","context","answer_in_context","Q_similar_context","C_similar_context","QC_similar_context","random_context"]].sample(100)
+        try:
+            wandb.init(project="craft-cases", name="unanswerable" if not args.test else "test-unanswerable", config=vars(args))
+            wandb.log({"samples": wandb.Table(dataframe=df)})
+        except:
+            df.to_csv(f"output/{args.task}_{now}.csv")
+    elif args.task == "entity":
+        df = pd.DataFrame(dataset)
+        df[args.ans_col] = df[args.ans_col].apply(lambda x: ", ".join(x))
+        df = df[["question", args.ans_col, "entity", "similar_entity","similar_entity_score","random_entity","random_entity_score"]].sample(100)
+        try:
+            wandb.init(project="craft-cases", name="similar_entity" if not args.test else "test-similar_entity", config=vars(args))
+            wandb.log({"samples": wandb.Table(dataframe=df),
+                "similar_entity_score_mean": df["similar_entity_score"].mean(),
+                "random_entity_score_mean": df["random_entity_score"].mean()})
+        except:
+            df.to_csv(f"output/{args.task}_{now}.csv")
+    wandb.finish()

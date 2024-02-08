@@ -3,15 +3,16 @@ import os
 from dataset import (
     split_sentence_and_make_short_context,
     preprocess_text,
-    annotate_answer_type
+    annotate_answer_type,
+    ner,
+    gen_entity_vector,
+    generate_entity_pool
 )
-
-from datasets import load_dataset
+from datasets import load_dataset, Dataset, DatasetDict, concatenate_datasets
 import joblib
 import pandas as pd
 import numpy as np
 from tqdm.auto import tqdm
-from datasets import Dataset, concatenate_datasets
 import spacy, torch
 import argparse
 import wandb
@@ -20,18 +21,34 @@ from src.utils import (
     cal_cosine_similarities,
     normalize_question
 )
+from src.index import build_index_with_ids
 from typing import List
-from preprocess import query_masking, remove_duplicate, query_embedding
+from preprocess import query_masking, remove_duplicate, query_embedding, remove_duplicate_by_similarity
 from transformers import AutoTokenizer, DPRQuestionEncoder
+from src.search import (
+    find_similar_questions,
+    find_similar_contexts,
+    find_similar_contexts_with_questions,
+    find_random_contexts,
+    find_similar_entity,
+    find_random_entity
+)
 
 def _load_dataset(args):
     if args.task == "preprocess":
         return load_mrqa(args)
     else:
-        dataset = load_dataset(args.processed_dataset, split="train")
-        if args.test:
-            return dataset.shuffle(seed=42).select(range(10000))
-        print(f"{args.dataset} Loaded! -> Size : {len(dataset)}")
+        if args.split != "all":
+            dataset = load_dataset(args.dataset, split="train")
+            if args.test:
+                return dataset.shuffle(seed=42).select(range(args.test_size))
+            print(f"{args.dataset} Loaded! -> Size : {len(dataset)}")
+        else:
+            dataset = load_dataset(args.dataset)
+            if args.test:
+                for subset in dataset.keys():
+                    dataset[subset] = dataset[subset].shuffle(seed=42).select(range(args.test_size))
+                    print(f"{args.dataset} {subset} Loaded! -> Size : {len(dataset[subset])}")
         return dataset
 
 def load_mrqa(args):
@@ -52,10 +69,12 @@ def preprocess(args, mrqa):
     mrqa = query_masking(nlp, mrqa)
     del nlp
     nlp = spacy.load(args.spliter_model)
-    mrqa = remove_duplicate(mrqa, tokenizer, model, args)
+    mrqa = remove_duplicate(mrqa)
     mrqa = preprocess_text(mrqa, args)
     mrqa = split_sentence_and_make_short_context(mrqa, nlp, args)
     mrqa = query_embedding(model, tokenizer, mrqa, args)
+    del nlp
+    mrqa = remove_duplicate_by_similarity(mrqa, tokenizer, model, args)
     if args.test:
         sample = mrqa.shuffle().select(range(10))
         for row in sample:
@@ -64,26 +83,23 @@ def preprocess(args, mrqa):
     else:
         mrqa = mrqa.remove_columns(["context","context_tokens","question_tokens","detected_answers"])
         mrqa = mrqa.rename_column("short_context", "context")
-        mrqa.push_to_hub("Atipico1/mrqa_preprocessed_v2")
+        mrqa.push_to_hub(f"Atipico1/mrqa_preprocessed_thres-{args.remove_duplicate_thres}_by-{args.sentence_embedder}")
 
 def generate_unans(args, dataset):
-    from src.search import (
-        find_similar_questions,
-        find_similar_contexts,
-        find_similar_contexts_with_questions,
-        find_random_contexts
-    )
     dataset, q_embs = find_similar_questions(dataset, args)
     dataset, c2embs = find_similar_contexts(dataset, args)
     dataset = find_similar_contexts_with_questions(q_embs, c2embs, dataset, args)
     dataset = find_random_contexts(dataset)
-    wandb.init(project="craft-cases", name="unanswerable" if not args.test else "test-unanswerable", config=vars(args))
     df = pd.DataFrame(dataset)
     df["answer_in_context"] = df["answer_in_context"].apply(lambda x: ", ".join(x))
     df = df[["question","context","answer_in_context","Q_similar_context","C_similar_context","QC_similar_context","random_context"]].sample(100)
-    wandb.log({"samples": wandb.Table(dataframe=df)})
+    try:
+        wandb.init(project="craft-cases", name="unanswerable" if not args.test else "test-unanswerable", config=vars(args))
+        wandb.log({"samples": wandb.Table(dataframe=df)})
+    except:
+        df.to_csv("unanswerable_result.csv") 
     if not args.test:
-        dataset.push_to_hub("Atipico1/mrqa_unanswerable_v2")
+        dataset.push_to_hub("Atipico1/mrqa_v2_unanswerable" if args.save_dir == "" else args.save_dir)
 
 def generate_similar_context(args, dataset):
     from vllm import LLM, SamplingParams
@@ -133,21 +149,16 @@ def generate_support_context(args):
     pass
     
 def generate_adversary(args, dataset):
-    nlp = spacy.load(args.spacy_model)
-    output = make_spacy_docs(dataset, nlp, args)
-    dataset= annotate_answer_type(dataset, output, args)
+    raise NotImplementedError("This function is not implemented yet")
 
-def generate_similar_entity(args):
-    from datasets import load_from_disk
-    from src.index import build_index_with_ids
-    from src.search import find_similar_entity, find_random_entity
-    dataset = load_from_disk(args.local_path)
-    dataset = dataset.filter(lambda x: not np.isnan(x["entity_vector"]).any(), batch_size=4000, num_proc=8)
-    dataset = dataset.filter(lambda x: x["entity"] is not None, num_proc=8)
-    if args.test:
-        dataset = dataset.shuffle(seed=42).select(range(1000))
-    entities_groupby_type = joblib.load(args.entity_path)
-    entity_vector_groupby_type = joblib.load(args.entity_vector_path)
+def generate_similar_entity(args, dataset: Dataset):
+    if args.entity_vector_path:
+        entities_groupby_type = joblib.load(args.entity_vector_path.replace("_vec.pkl", ".pkl"))
+        entity_vector_groupby_type = joblib.load(args.entity_vector_path)
+    else:
+        entities_groupby_type, entity_vector_groupby_type = generate_entity_pool(dataset, args)
+    dataset = ner(dataset, args, "context")
+    dataset = gen_entity_vector(dataset, args, args.ans_col)
     index_per_entity = {}
     for k, v in entity_vector_groupby_type.items():
         v = np.array(v).astype('float32')
@@ -162,17 +173,14 @@ def generate_similar_entity(args):
     random_scores = cal_cosine_similarities(dataset["entity_vector"], dataset["random_entity"], args)
     dataset = dataset.add_column("random_entity_score", random_scores)
     dataset = dataset.remove_columns(["entity_vector"])
-    wandb.init(project="craft-cases", name="similar_entity" if not args.test else "test-similar_entity", config=vars(args))
-    df = pd.DataFrame(dataset)
-    df[args.ans_col] = df[args.ans_col].apply(lambda x: ", ".join(x))
-    df = df[["question", args.ans_col, "entity", "similar_entity","similar_entity_score","random_entity","random_entity_score"]].sample(100)
-    wandb.log({"samples": wandb.Table(dataframe=df),
-               "similar_entity_score_mean": df["similar_entity_score"].mean(),
-               "random_entity_score_mean": df["random_entity_score"].mean()})
-    if args.output_dir:
-        dataset.save_to_disk(args.output_dir)
-    # if not args.test:
-    #     dataset.push_to_hub("Atipico1/mrqa_preprocessed_with_substitution")
+    if not args.test and args.save_dir != "":
+        if args.split != "all":
+            dataset.push_to_hub(args.save_dir)
+            return None
+        else:
+            return dataset
+    else:
+        return None
 
 def generate_conflict_context(args, dataset):
     from vllm import LLM, SamplingParams
@@ -234,13 +242,15 @@ if __name__=="__main__":
     # Main parser
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="mrqa")
-    parser.add_argument("--processed_dataset", type=str, default="Atipico1/mrqa_preprocessed")
+    parser.add_argument("--save_dir", type=str, default="", help="hub path or local path to save")
     parser.add_argument("--use_gpu", type=str2bool, default=True)
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--test", type=str2bool, default=False)
+    parser.add_argument("--test_size", type=int, default=1000)
     parser.add_argument("--spacy_model", type=str, default="en_core_web_trf")
     parser.add_argument("--spliter_model", type=str, default="en_core_web_sm")
     parser.add_argument("--batch_size", type=int, default=1024)
+    parser.add_argument("--split", type=str, default="")
     # Make subparsers
     subparsers = parser.add_subparsers(dest="task", help='Possible tasks: preprocess | all | unans | adversary | conflict')
 
@@ -253,31 +263,31 @@ if __name__=="__main__":
         '--except_subset', nargs='+', type=str, default='SearchQA',
         help='Possible Subsets: SearchQA | SQuAD | NaturalQuestionsShort | HotpotQA | NewsQA'
         )
+    preprocess_parser.add_argument('--sentence_embedder', type=str, default="dpr")
     preprocess_parser.add_argument('--answer_max_len', type=int, default=10)
     preprocess_parser.add_argument('--remove_duplicate_thres', type=float, default=0.95)
     # Unans parser
     unans_parser = subparsers.add_parser('unans', help='Generate unanswerable cases')
-    unans_parser.add_argument('--alpha', type=float, default=0.5)
+    unans_parser.add_argument('--alpha', type=float, default=0.2, help='alpha for weighted average unanswerable case generation')
     unans_parser.add_argument('--topk', type=int, default=10, help='Top k nearest neighbors for faiss search')
     # Adversary parser
     adv_parser = subparsers.add_parser('adversary', help='Run task 3')
     adv_parser.add_argument('--save_dir', help='path to save the docs', type=str, default='/data/seongilpark/adversary')
     
-    # Gen similar entity parser
+    # Entity parser
     entity_parser = subparsers.add_parser('entity', help='Generate similar entity')
-    entity_parser.add_argument('--entity_path', help='path to entity', type=str, default='/data/seongil/datasets/mrqa_valid_entities.pkl')
-    entity_parser.add_argument('--entity_vector_path', help='path to entity vector', type=str, default='/data/seongil/datasets/mrqa_valid_entities_vec.pkl')
-    entity_parser.add_argument('--local_path', help='path to local', type=str, default='/data/seongil/datasets/mrqa_preprocessed_with_entity_norm_vector')
+    entity_parser.add_argument('--entity_vector_path', help='path to entity vector', type=str, default='/data/seongilpark/dataset/mrqa_valid_entities_vec.pkl')
     entity_parser.add_argument('--ans_col', help="answer column name", type=str, default='answer_in_context')
     entity_parser.add_argument("--threshold", type=float, default=0.8)
-    entity_parser.add_argument("--output_dir", type=str, default="")
-    
+    entity_parser.add_argument("--use_wikitext", type=str2bool, default=True)
+    # Similar context parser
     similar_context_parser = subparsers.add_parser('similar_context', help='Generate similar context')
     similar_context_parser.add_argument('--temperature', type=float, default=0.8)
     similar_context_parser.add_argument('--top_p', type=float, default=0.95)
     similar_context_parser.add_argument('--max_tokens', type=int, default=300)
     similar_context_parser.add_argument('--lm', type=str, default='Upstage/SOLAR-10.7B-Instruct-v1.0')
     
+    # Conflict parser
     conflict_context_parser = subparsers.add_parser('conflict_context', help='Generate conflict context')
     conflict_context_parser.add_argument('--temperature', type=float, default=0.8)
     conflict_context_parser.add_argument('--top_p', type=float, default=0.95)
@@ -285,10 +295,13 @@ if __name__=="__main__":
     conflict_context_parser.add_argument('--lm', type=str, default='Upstage/SOLAR-10.7B-Instruct-v1.0')
     
     args = parser.parse_args()
-    if args.use_gpu and args.gpu_id >= 0:
-        spacy.prefer_gpu(args.gpu_id)
-    if args.task != "entity":
-        dataset = _load_dataset(args)
+    if args.use_gpu:
+        if args.gpu_id >= 0:
+            gpu_available=spacy.prefer_gpu(args.gpu_id)
+        else:
+            gpu_available=spacy.prefer_gpu(1)
+        print("Spacy GPU Available:", gpu_available)
+    dataset = _load_dataset(args)
     if args.task == "preprocess":
         preprocess(args, dataset)
     elif args.task == "unans":
@@ -300,6 +313,12 @@ if __name__=="__main__":
     elif args.task == "conflict_context":
         generate_conflict_context(args, dataset)
     elif args.task == "entity":
-        generate_similar_entity(args)
+        if args.split != "all":
+            generate_similar_entity(args, dataset)
+        else:
+            output = {}
+            for subset in dataset.keys():
+                output[subset] = generate_similar_entity(args, dataset[subset])
+            DatasetDict(output).push_to_hub(args.save_dir)
     else:
         raise ValueError(f"Invalid task: {args.task}")

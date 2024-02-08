@@ -98,10 +98,10 @@ def cosine_similarity(a, b):
 def cal_cosine_similarities(queries_vector: List[np.ndarray], entities: List[str], args):
     import spacy
     scores = []
-    nlp = spacy.load(args.spacy_model)
+    nlp = spacy.load("en_core_web_lg")
     assert len(queries_vector) == len(entities), "Length of queries and entities should be same"
     for i in tqdm(range(0, len(queries_vector), args.batch_size), desc="Generating random entity score"):
-        docs = nlp.pipe(entities[i:i+args.batch_size], disable=["ner"])
+        docs = nlp.pipe(entities[i:i+args.batch_size], batch_size=args.batch_size)
         for doc, query in zip(docs, queries_vector[i:i+args.batch_size]):
             scores.append(cosine_similarity(query, doc.vector))
     return scores

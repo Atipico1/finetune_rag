@@ -16,7 +16,7 @@ from transformers import (
 # os.environ["WANDB_PROJECT"] = "finetune-robust-rag"
 
 def save_samples(dataset, args):
-    sample = dataset[:20]
+    sample = dataset[:50]
     formatting_func = get_formatting_func(args)
     samples = formatting_func(sample)
     sample = pd.DataFrame(sample)
@@ -26,6 +26,10 @@ def save_samples(dataset, args):
     if args.unanswerable:
         cols.insert(2, "original_answers")
         sample["original_answers"] = sample["original_answers"].apply(lambda x: ", ".join(x) if len(x) > 1 else x[0])
+    if args.conflict:
+        cols.insert(2, "original_answers")
+        sample["original_answers"] = sample["original_answers"].apply(lambda x: ", ".join(x) if len(x) > 1 else x[0])
+        cols.append("is_conflict")
     sample = sample[cols]
     sample_table = wandb.Table(dataframe=sample)
     wandb.log({"samples": sample_table})

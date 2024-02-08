@@ -13,7 +13,9 @@ import time
 from dataset import make_case_text, make_custom_case_text
 
 NAME_TO_PATH = {
-    "NQ": "Atipico1/NQ_preprocessed_with_o-u_case",
+    #"NQ": "Atipico1/NQ_preprocessed_with_o-u_case",
+    #"NQ":"Atipico1/NQ_preprocessed_with_o-u-c_case",
+    "NQ":"Atipico1/NQ-colbert-10k-case",
     "TQA": "Atipico1/trivia-top5_preprocessed_with_o-u_case",
     "WEBQ": "Atipico1/webq-top5_preprocessed_with_o-u_case"
     }
@@ -39,7 +41,7 @@ def formatting_for_evaluation(row, args):
     return text
 
 def evaluate(pipe, dataset, run_name:str, args):
-    result, ems, accs, f1_scores = [], [], [], []
+    result, ems, accs, conflicts = [], [], [], []
     iterator = tqdm(dataset, desc="Generating...")
     with torch.no_grad():
         for idx, row in enumerate(iterator):
@@ -56,15 +58,28 @@ def evaluate(pipe, dataset, run_name:str, args):
             ems.append(is_em)
             accs.append(is_acc)
             result.append([row["question"], ", ".join(row["answers"]), prompt, output_wo_prompt, is_em, is_acc, f1_score_, hasanswer])
+            if args.conflict:
+                result[-1].append(row["is_conflict"])
             iterator.set_description(desc=f"EM : {sum(ems)/len(ems)*100:.2f} | Acc : {sum(accs)/len(accs)*100:.2f}")
-    df = pd.DataFrame(result, columns=["Question", "Answers", "Prompt", "Prediction", "EM", "ACC", "F1", "hasanswer"])
+    columns = ["Question", "Answers", "Prompt", "Prediction", "EM", "ACC", "F1", "hasanswer"]
+    if args.conflict:
+        columns.append("is_conflict")
+    df = pd.DataFrame(result, columns=columns)
     data = df[["EM", "ACC", "F1", "hasanswer"]].mean().to_dict()
+    df["Prediction"] = df["Prediction"].apply(lambda x: x.strip() if isinstance(x, str) else x)
     answerable_em, unanswerable_em = df[df["hasanswer"] == True]["EM"].mean(), df[df["hasanswer"] == False]["EM"].mean()
     answerable_acc, unanswerable_acc = df[df["hasanswer"] == True]["ACC"].mean(), df[df["hasanswer"] == False]["ACC"].mean()
+    if args.conflict:
+        conflict_em = df[df["is_conflict"] == True]["EM"].mean()
+        conflict_ratio = len(df[df["Prediction"] == "conflict"]) / len(df)
+        data.update({"conflict_EM": conflict_em,
+                     "conflict_ratio": conflict_ratio})
+    unanswerable_ratio = len(df[df["Prediction"] == "unanswerable"]) / len(df)
     data.update({"answerable_EM": answerable_em,
                  "unanswerable_EM": unanswerable_em,
                  "answerable_ACC": answerable_acc,
-                 "unanswerable_ACC": unanswerable_acc})
+                 "unanswerable_ACC": unanswerable_acc,
+                 "unanswerable_ratio": unanswerable_ratio})
     data = {k:round(v*100,2) for k,v in data.items()}
     wandb.init(
         project='evaluate-robust-rag', 
@@ -101,24 +116,30 @@ def main(args):
         framework="pt"
     )
     model_name = args.model.split("/")[-2] if len(args.model.split("/")) > 2 else args.model.split("/")[-1]
-    if args.test:
-        dataset = dataset.shuffle(seed=42)
-        dataset = dataset.select(range(10))
-        run_name += "-test"
+
     
     if args.datasets != []:
         for dataset_name in args.datasets:
             dataset = load_dataset(NAME_TO_PATH[dataset_name], split="test")
             dataset = preprocess_dataset(dataset, args, "test")
             run_name = f"{dataset_name}-{model_name}"
+            if args.test:
+                dataset = dataset.shuffle(seed=42)
+                dataset = dataset.select(range(10))
+                run_name += "-test"
             if args.prefix:
                 run_name = f"{args.prefix}-{run_name}"
             evaluate(pipe, dataset, run_name, args)
     else:
+
         dataset = load_dataset(args.dataset_name, split="test")
         dataset = preprocess_dataset(dataset, args, "test")
         dataset_name = PATH_TO_NAME[args.dataset_name]
         run_name = f"{dataset_name}-{model_name}"
+        if args.test:
+            dataset = dataset.shuffle(seed=42)
+            dataset = dataset.select(range(10))
+            run_name += "-test"
         evaluate(pipe, dataset, run_name, args)
 
 
@@ -141,6 +162,10 @@ if __name__ == "__main__":
     parser.add_argument("--max_new_tokens", type=int, default=10)
     parser.add_argument("--test", type=str2bool, default=False)
     parser.add_argument("--only_has_answer", type=str2bool, default=False)
+    parser.add_argument("--conflict", type=str2bool, default=False)
+    parser.add_argument("--conflict_only", type=str2bool, default=True)
+    parser.add_argument("--both", type=str2bool, default=False)
+    parser.add_argument("--anonymize", type=str2bool, default=False)
     args = parser.parse_args()
     main(args)
 

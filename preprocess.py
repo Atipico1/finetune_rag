@@ -6,6 +6,7 @@ from datasets import load_dataset, Dataset, DatasetDict
 from transformers import AutoTokenizer, DPRQuestionEncoder
 from src.utils import str2bool
 import numpy as np
+import cupy as cp
 
 def masking(doc) -> str:
     if not len(doc.ents):
@@ -46,7 +47,42 @@ def query_embedding(model, tokenizer, dataset: Dataset, args):
     assert len(result) == len(queries), "Length doesn't match"
     return dataset.add_column("query_embedding", result)
 
-def remove_duplicate(data: Dataset, tokenizer, model, args):
+def remove_duplicate_by_similarity(dataset: Dataset, tokenizer, model, args):
+    questions = dataset["question"]
+    result = []
+    if args.sentence_embedder == "dpr":
+        model.eval()
+        with torch.no_grad():
+            for i in tqdm(range(0, len(questions), args.batch_size), desc="Embedding..."):
+                batch = questions[i:i+args.batch_size]
+                output = tokenizer(batch, padding="max_length", truncation=True, max_length=64, return_tensors="pt").to("cuda")
+                embeddings = model(**output).pooler_output.detach().cpu().numpy() # [args.batch_size, hidden_dim]
+                result.extend([emb for emb in embeddings])
+    else:
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer('sentence-transformers/all-MiniLM-L12-v2', device="cuda")
+        model.max_seq_length = 64
+        with torch.no_grad():
+            for i in tqdm(range(0, len(questions), args.batch_size), desc="Embedding..."):
+                batch = questions[i:i+args.batch_size]
+                result.extend(model.encode(batch, batch_size=args.batch_size, show_progress_bar=False))
+    torch.cuda.empty_cache()
+    matrix = cp.array([v/np.linalg.norm(v) for v in result], dtype=cp.float16)
+    key_matrix_indices = []
+    for i in tqdm(range(len(matrix)), desc="Removing duplicates by similarity..."):
+        if len(key_matrix_indices) == 0:
+            key_matrix_indices.append(i)
+        else:
+            current_matrix = matrix[i:i+1]
+            key_matrix_subset = matrix[key_matrix_indices]
+            similarity = cp.dot(current_matrix, key_matrix_subset.T)
+            if not cp.any(similarity >= args.remove_duplicate_thres):
+                key_matrix_indices.append(i)
+    print(f"Remove duplicates by similarity-> Before : {len(dataset)} | After : {len(key_matrix_indices)}")
+    dataset = dataset.select(key_matrix_indices, writer_batch_size=50000)
+    return dataset
+
+def remove_duplicate(data: Dataset):
     masked_queries = data["masked_query"]
     unique_queries = set()
     result_idxs = []
@@ -56,37 +92,6 @@ def remove_duplicate(data: Dataset, tokenizer, model, args):
             result_idxs.append(idx)
     print(f"Remove duplicates by string match -> Before : {len(data)} | After : {len(result_idxs)}")
     filtered_data = data.select(result_idxs, writer_batch_size=50000)
-    
-    questions = filtered_data["question"]
-    result = []
-    for i in tqdm(range(0, len(questions), args.batch_size), desc="Embedding..."):
-        batch = questions[i:i+args.batch_size]
-        output = tokenizer(batch, padding="max_length", truncation=True, max_length=64, return_tensors="pt").to("cuda")
-        with torch.no_grad():
-            embeddings = model(**output).pooler_output.detach().cpu().numpy() # [args.batch_size, hidden_dim]
-        result.extend([emb for emb in embeddings])
-    matrix = np.array([v/np.linalg.norm(v) for v in result])
-    key_matrix = np.empty((0, matrix.shape[1]))
-    valid_indices = []
-    # 100개의 행렬을 순회
-    for i in tqdm(range(len(matrix)), desc="Removing duplicates by similarity..."):
-        current_matrix = matrix[i:i+1]  # 현재 행렬 (1x768)
-
-        # 첫 번째 iteration 예외 처리
-        if key_matrix.shape[0] == 0:
-            key_matrix = np.vstack([key_matrix, current_matrix])
-        else:
-            # 현재 행렬과 키 매트릭스의 행렬 곱셈 수행
-            result = np.dot(current_matrix, key_matrix.T)  # 결과는 (1xN) 형태가 됨, N은 key_matrix에 있는 행렬의 수        
-            # 결과값 중 임계값 이상인 값이 하나라도 있는지 확인
-            if np.any(result >= args.remove_duplicate_thres):
-                pass  # 임계값 이상인 값이 있다면 pass
-            else:
-                # 그렇지 않다면 현재 행렬을 key_matrix에 추가
-                key_matrix = np.vstack([key_matrix, current_matrix])
-                valid_indices.append(i)
-    print(f"Remove duplicates by similarity-> Before : {len(filtered_data)} | After : {len(valid_indices)}")
-    filtered_data = filtered_data.select(valid_indices, writer_batch_size=50000)
     return filtered_data
 
 def _preprocess(dataset: Dataset, args):
