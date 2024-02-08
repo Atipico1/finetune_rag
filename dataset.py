@@ -452,8 +452,8 @@ def generate_entity_pool(dataset: Dataset, args):
         
 def save_samples_to_wandb(dataset: Dataset, args):
     now = dt.datetime.now().strftime("%m-%d-%H-%M")
+    df = pd.DataFrame(dataset)
     if args.task == "unans":
-        df = pd.DataFrame(dataset)
         df["answer_in_context"] = df["answer_in_context"].apply(lambda x: ", ".join(x))
         df = df[["question","context","answer_in_context","Q_similar_context","C_similar_context","QC_similar_context","random_context"]].sample(100)
         try:
@@ -462,7 +462,6 @@ def save_samples_to_wandb(dataset: Dataset, args):
         except:
             df.to_csv(f"output/{args.task}_{now}.csv")
     elif args.task == "entity":
-        df = pd.DataFrame(dataset)
         df[args.ans_col] = df[args.ans_col].apply(lambda x: ", ".join(x))
         df = df[["question", args.ans_col, "entity", "similar_entity","similar_entity_score","random_entity","random_entity_score"]].sample(100)
         try:
@@ -470,6 +469,16 @@ def save_samples_to_wandb(dataset: Dataset, args):
             wandb.log({"samples": wandb.Table(dataframe=df),
                 "similar_entity_score_mean": df["similar_entity_score"].mean(),
                 "random_entity_score_mean": df["random_entity_score"].mean()})
+        except:
+            df.to_csv(f"output/{args.task}_{now}.csv")
+    elif args.task == "similar_context":
+        try:
+            wandb.init(project="craft-cases", name="similar_context" if not args.test else "test-similar_context", config=vars(args))
+            df[args.ans_col] = df[args.ans_col].apply(lambda x: ", ".join(x))
+            df = df[["question",args.ans_col,"context","rewritten_context","valid"]]
+            wandb.log({"samples": wandb.Table(dataframe=df.sample(100)),
+                    "valid_ratio": df["valid"].mean()})
+            wandb.log({"samples": wandb.Table(dataframe=df)})
         except:
             df.to_csv(f"output/{args.task}_{now}.csv")
     wandb.finish()

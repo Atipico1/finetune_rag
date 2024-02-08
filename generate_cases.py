@@ -3,7 +3,7 @@ import os
 from dataset import (
     split_sentence_and_make_short_context,
     preprocess_text,
-    annotate_answer_type,
+    save_samples_to_wandb,
     ner,
     gen_entity_vector,
     generate_entity_pool
@@ -90,14 +90,7 @@ def generate_unans(args, dataset):
     dataset, c2embs = find_similar_contexts(dataset, args)
     dataset = find_similar_contexts_with_questions(q_embs, c2embs, dataset, args)
     dataset = find_random_contexts(dataset)
-    df = pd.DataFrame(dataset)
-    df["answer_in_context"] = df["answer_in_context"].apply(lambda x: ", ".join(x))
-    df = df[["question","context","answer_in_context","Q_similar_context","C_similar_context","QC_similar_context","random_context"]].sample(100)
-    try:
-        wandb.init(project="craft-cases", name="unanswerable" if not args.test else "test-unanswerable", config=vars(args))
-        wandb.log({"samples": wandb.Table(dataframe=df)})
-    except:
-        df.to_csv("unanswerable_result.csv") 
+    save_samples_to_wandb(dataset, args)
     if not args.test:
         dataset.push_to_hub("Atipico1/mrqa_v2_unanswerable" if args.save_dir == "" else args.save_dir)
 
@@ -106,44 +99,26 @@ def generate_similar_context(args, dataset):
     from src.search import (
     has_answer,
     SimpleTokenizer
-)
-    raw_text = """Rewrite the following ariticle, maintaining its original meaning. Do not add any new information. Keep the specified words unchanged.
-Words to Keep Unchanged: {ANSWERS}
-Original Article: {CONTEXT}
-Rewritten Article:"""
-    def make_prompt(ans, ctx, key: str):
-        if key=="solar":
-            prompt = raw_text.format(ANSWERS=", ".join(ans), CONTEXT=ctx)
-            #prompt = tokenizer(prompt, return_tensors="pt").to(model.device)
-            return prompt
-        else:
-            pass
-    #dataset = load_dataset("Atipico1/mrqa_preprocessed_with_substitution", split="train")
-    if args.test:
-        dataset = dataset.shuffle(seed=42).select(range(100))
-    sampling_params = SamplingParams(temperature=args.temperature, top_p=args.top_p, max_tokens=args.max_tokens)
+)   
+    from src.prompt import REWRITE
+    sampling_params = SamplingParams(top_p=args.top_p, max_tokens=args.max_tokens)
     llm = LLM(model=args.lm, tensor_parallel_size=2, seed=42)
     generated_texts = []
-    answers, contexts = dataset["answer_in_context"], dataset["context"]
+    answers, contexts = dataset[args.ans_col], dataset["context"]
     with torch.no_grad():
-        for i in tqdm(range(0, len(answers), args.batch_size), desc="Generating Rewrites"):
+        for i in tqdm(range(0, len(answers), args.batch_size), desc="Generating Rewrites..."):
             batch_answers = answers[i:i+args.batch_size]
             batch_contexts = contexts[i:i+args.batch_size]
-            prompts = [make_prompt(ans, ctx, key="solar") for ans, ctx in zip(batch_answers, batch_contexts)]
+            prompts = [REWRITE.format(ANSWERS=ans, CONTEXT=ctx) for ans, ctx in zip(batch_answers, batch_contexts)]
             outputs = llm.generate(prompts, sampling_params)
             for output in outputs:
                 generated_texts.append(output.outputs[0].text.strip())
     dataset = dataset.add_column("rewritten_context", generated_texts)
     tokenizer = SimpleTokenizer()
-    dataset = dataset.map(lambda x: {"valid": has_answer(x["answer_in_context"], x["rewritten_context"], tokenizer)}, num_proc=8)
-    wandb.init(project="craft-cases", name="similar-context" if not args.test else "test-similar-context", config=vars(args))
-    df = pd.DataFrame(dataset)
-    df["answer_in_context"] = df["answer_in_context"].apply(lambda x: ", ".join(x))
-    df = df[["question","answer_in_context","context","rewritten_context","valid"]]
-    wandb.log({"samples": wandb.Table(dataframe=df.sample(100)),
-              "valid_ratio": df["valid"].mean()})
-    if not args.test:
-        dataset.push_to_hub("Atipico1/mrqa_preprocessed_with_substitution-rewritten")                
+    dataset = dataset.map(lambda x: {"valid": has_answer(x[args.ans_col], x["rewritten_context"], tokenizer)}, num_proc=8)
+    save_samples_to_wandb(dataset, args)
+    if not args.test and args.save_dir != "":
+        dataset.push_to_hub(args.save_dir)                
 
 def generate_support_context(args):
     pass
@@ -173,6 +148,7 @@ def generate_similar_entity(args, dataset: Dataset):
     random_scores = cal_cosine_similarities(dataset["entity_vector"], dataset["random_entity"], args)
     dataset = dataset.add_column("random_entity_score", random_scores)
     dataset = dataset.remove_columns(["entity_vector"])
+    save_samples_to_wandb(dataset, args)
     if not args.test and args.save_dir != "":
         if args.split != "all":
             dataset.push_to_hub(args.save_dir)
@@ -197,7 +173,7 @@ Claim: {CLAIM}
 Passage:"""
     if args.test:
         dataset = dataset.shuffle(seed=42).select(range(1000))
-    sampling_params = SamplingParams(temperature=args.temperature, top_p=args.top_p, max_tokens=args.max_tokens)
+    sampling_params = SamplingParams(top_p=args.top_p, max_tokens=args.max_tokens)
     llm = LLM(model=args.lm, tensor_parallel_size=2, seed=42)
     generated_texts = []
     tokenizer = SimpleTokenizer()
@@ -282,9 +258,9 @@ if __name__=="__main__":
     entity_parser.add_argument("--use_wikitext", type=str2bool, default=True)
     # Similar context parser
     similar_context_parser = subparsers.add_parser('similar_context', help='Generate similar context')
-    similar_context_parser.add_argument('--temperature', type=float, default=0.8)
-    similar_context_parser.add_argument('--top_p', type=float, default=0.95)
+    similar_context_parser.add_argument('--top_p', type=float, default=0.9)
     similar_context_parser.add_argument('--max_tokens', type=int, default=300)
+    similar_context_parser.add_argument('--ans_col', type=str, default='answer_in_context')
     similar_context_parser.add_argument('--lm', type=str, default='Upstage/SOLAR-10.7B-Instruct-v1.0')
     
     # Conflict parser
