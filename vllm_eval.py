@@ -1,4 +1,4 @@
-import argparse, os, wandb
+import argparse, os, wandb, torch
 from vllm import LLM, SamplingParams
 from vllm.lora.request import LoRARequest
 from dataset import preprocess_dataset
@@ -18,24 +18,24 @@ NAME_TO_PATH = {
 PATH_TO_NAME = {v:k for k,v in NAME_TO_PATH.items()}
 
     
-def save_results(dataset, ems, f1s, accs, args):
+def save_results(dataset, ems, f1s, accs,run_name, args):
     df = pd.DataFrame({
-        "question": dataset["question"],
-        "answers": dataset["answers"],
-        "prompt": dataset["prompt"],
-        "output": dataset["output"],
+        "Question": dataset["question"],
+        "Answers": dataset["answers"],
+        "Prompt": dataset["prompt"],
+        "Prediction": dataset["Prediction"],
         "hasanswer": dataset["hasanswer"],
-        "exact_match": ems,
-        "f1_score": f1s,
-        "hasanswer": accs
+        "EM": ems,
+        "F1": f1s,
+        "Acc": accs
     })
     answerable_em, unanswerable_em = df[df["hasanswer"] == True]["EM"].mean(), df[df["hasanswer"] == False]["EM"].mean()
-    answerable_acc, unanswerable_acc = df[df["hasanswer"] == True]["ACC"].mean(), df[df["hasanswer"] == False]["ACC"].mean()
-    data = df[["EM", "ACC", "F1", "hasanswer"]].mean().to_dict()
-    data.update({"answerable_EM": answerable_em,
-                 "unanswerable_EM": unanswerable_em,
-                 "answerable_ACC": answerable_acc,
-                 "unanswerable_ACC": unanswerable_acc})
+    answerable_acc, unanswerable_acc = df[df["hasanswer"] == True]["Acc"].mean(), df[df["hasanswer"] == False]["Acc"].mean()
+    data = df[["EM", "Acc", "F1", "hasanswer"]].mean().to_dict()
+    data.update({"EM (ans)": answerable_em,
+                 "EM (unans)": unanswerable_em,
+                 "Acc (ans)": answerable_acc,
+                 "Acc (unans)": unanswerable_acc})
     data = {k:round(v*100,2) for k,v in data.items()}
     wandb.init(
         project='evaluate-robust-rag', 
@@ -49,15 +49,20 @@ def save_results(dataset, ems, f1s, accs, args):
     wandb.finish()
 
 def evaluate(dataset, run_name, args):
-    llm = LLM(model="meta-llama/Llama-2-7b-hf", seed=42, enable_lora=True, max_lora_rank=64)
+    llm = LLM(model="meta-llama/Llama-2-7b-hf",
+              tensor_parallel_size=torch.cuda.device_count(),
+              seed=42,
+              enable_lora=True,
+              max_lora_rank=64)
     dataset = dataset.map(lambda x: {"prompt":formatting_for_evaluation(x, args)}, num_proc=os.cpu_count())
     sampling_params = SamplingParams(temperature=0, max_tokens=20)
     outputs = llm.generate(dataset["prompt"],sampling_params,lora_request=LoRARequest("lora", 1, args.model))
     outputs = [o.outputs[0].text.strip() for o in outputs]
+    dataset = dataset.add_column("Prediction",outputs)
     ems = [exact_match_score(pred, label) for pred, label in zip(outputs, dataset["answers"])]
     f1s = [f1_score(pred, label) for pred, label in zip(outputs, dataset["answers"])]
     accs = [text_has_answer(label, pred) for label, pred in zip(dataset["answers"], outputs)]
-    save_results(dataset, ems, f1s, accs, args)
+    save_results(dataset, ems, f1s, accs, run_name, args)
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
